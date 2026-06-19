@@ -11,4 +11,6 @@
 .cxx
 local.properties
 *.apk
-!dist/*.apk
+dist/
+keystore.properties
+*.jks

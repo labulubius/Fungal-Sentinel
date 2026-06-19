@@ -17,7 +17,7 @@
 - Test: `app/src/test/java/com/example/myapplication/CameraControlSettingsTest.kt`
 
 - [ ] Write failing tests for default manual settings, automatic mode, and clamping.
-- [ ] Run `.\gradlew.bat testDebugUnitTest --tests com.example.myapplication.CameraControlSettingsTest` and verify it fails because the model does not exist.
+- [ ] Run `.\gradlew.bat testDebugUnitTest --tests org.fungalsentinel.app.CameraControlSettingsTest` and verify it fails because the model does not exist.
 - [ ] Implement `CameraControlSettings`, `CameraControlRanges`, and `CameraControlSupport`.
 - [ ] Run the same unit test and verify it passes.
 

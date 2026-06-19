@@ -16,7 +16,9 @@ Full functionality requires a device whose Camera2 implementation exposes `MANUA
 
 ## Install
 
-Download the APK from `dist/Fungal-Sentinel-v1.0.apk` and install it on an Android phone. Android may require allowing installation from unknown sources.
+Download the APK from the repository's GitHub Releases page and install it on an Android phone. Android may require allowing installation from unknown sources.
+
+Do not clone the repository if you only want to use the app. Cloning is for developers who want the source code.
 
 ## Build
 
@@ -29,3 +31,9 @@ $env:Path="$env:JAVA_HOME\bin;$env:Path"
 ```
 
 The release APK is generated at `app/build/outputs/apk/release/app-release.apk`.
+
+For long-term distribution, create a private `keystore.properties` file based on `keystore.properties.example`. The real keystore and passwords must not be committed.
+
+## Package ID
+
+The Android application ID is `org.fungalsentinel.app`. Keep this stable after public distribution so future APKs install as updates instead of separate apps.
