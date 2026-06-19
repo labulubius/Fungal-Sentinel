@@ -20,6 +20,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
 import android.provider.MediaStore
+import android.util.Log
 import android.util.Range
 import android.util.Size
 import android.view.Surface
@@ -69,6 +70,8 @@ import kotlin.math.roundToLong
 
 class MainActivity : ComponentActivity() {
 
+    private val logTag = "FungalSentinel"
+
     private val cameraId = "0"
 
     private lateinit var cameraManager: CameraManager
@@ -91,6 +94,7 @@ class MainActivity : ComponentActivity() {
     private var cameraSupport by mutableStateOf(CameraControlSupport(false, false, false, false, false, false))
     private var controlRanges by mutableStateOf(CameraControlRanges.fallback)
     private var cameraSettings by mutableStateOf(CameraControlSettings.manualDefaults())
+    private var captureReady by mutableStateOf(false)
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -197,7 +201,7 @@ class MainActivity : ComponentActivity() {
 
                     Button(
                         onClick = { captureRawDng() },
-                        enabled = cameraSupport.raw,
+                        enabled = cameraSupport.raw && captureReady,
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
                             .padding(24.dp),
@@ -206,7 +210,13 @@ class MainActivity : ComponentActivity() {
                             disabledContentColor = Color.LightGray
                         )
                     ) {
-                        Text(if (cameraSupport.raw) "Save DNG" else "RAW Unsupported")
+                        Text(
+                            when {
+                                !cameraSupport.raw -> "RAW Unsupported"
+                                !captureReady -> "Camera Starting"
+                                else -> "Save DNG"
+                            }
+                        )
                     }
 
                     if (settingsPanelVisible) {
@@ -256,6 +266,7 @@ class MainActivity : ComponentActivity() {
     private fun startPreview(view: TextureView) {
         val camera = cameraDevice ?: return
         val surfaceTexture = view.surfaceTexture ?: return
+        updateCaptureReady(false)
 
         surfaceTexture.setDefaultBufferSize(view.width, view.height)
         previewSurface?.release()
@@ -297,6 +308,7 @@ class MainActivity : ComponentActivity() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     captureSession = session
                     applyRepeatingRequest()
+                    updateCaptureReady(rawImageReader != null)
                 }
 
                 override fun onConfigureFailed(session: CameraCaptureSession) {
@@ -340,6 +352,10 @@ class MainActivity : ComponentActivity() {
         }
         val session = captureSession ?: run {
             showMessage("Capture session is not ready.")
+            return
+        }
+        if (!captureReady) {
+            showMessage("Camera is still preparing.")
             return
         }
         val rawSurface = rawImageReader?.surface ?: run {
@@ -395,7 +411,7 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        requestBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+        requestBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_OFF)
         requestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
         requestBuilder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, settings.exposureTimeNs)
         requestBuilder.set(CaptureRequest.SENSOR_SENSITIVITY, settings.iso)
@@ -506,8 +522,10 @@ class MainActivity : ComponentActivity() {
         try {
             val fileName = "fungal_sentinel_${System.currentTimeMillis()}.dng"
             saveDng(fileName, image, result)
+            Log.i(logTag, "Saved DNG: $fileName")
             showMessage("Saved: $fileName")
         } catch (e: Exception) {
+            Log.e(logTag, "DNG save failed", e)
             showMessage("DNG save failed: ${e.message}")
         } finally {
             image.close()
@@ -555,6 +573,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun closeCamera() {
+        updateCaptureReady(false)
+
         captureSession?.close()
         captureSession = null
 
@@ -592,6 +612,12 @@ class MainActivity : ComponentActivity() {
     private fun showMessage(message: String) {
         runOnUiThread {
             Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun updateCaptureReady(ready: Boolean) {
+        runOnUiThread {
+            captureReady = ready
         }
     }
 }
