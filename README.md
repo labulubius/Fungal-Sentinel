@@ -1,6 +1,6 @@
 # Fungal Sentinel
 
-Fungal Sentinel is an Android Camera2 RAW capture app for devices that expose manual camera controls and RAW output.
+Fungal Sentinel is an offline Android Camera2 RAW capture and fluorescence spectral-analysis app for devices that expose manual camera controls and RAW output.
 
 ## Features
 
@@ -8,11 +8,26 @@ Fungal Sentinel is an Android Camera2 RAW capture app for devices that expose ma
 - Real-time manual controls for exposure time, ISO, focus distance, white balance mode, noise reduction, edge enhancement, and hot pixel correction.
 - Device capability detection with unsupported controls disabled.
 - DNG capture saved through Android MediaStore.
+- Four-step on-device FSSA workflow: wavelength calibration, true-SPD response calibration, sample analysis, and concentration regression.
+- Direct, memory-efficient extraction of one-dimensional R/G/B profiles from `RAW_SENSOR` frames.
+- Saturation rejection and capture-metadata locking across an experiment.
+- Support for Ypet, EGFP, mCherry, CFP, and mTurquoise2.
 - Fungal Sentinel launcher icon and app name.
 
 ## Compatibility
 
 Full functionality requires a device whose Camera2 implementation exposes `MANUAL_SENSOR` and `RAW` capabilities. Devices with partial Camera2 support can still open the app, but RAW capture or individual controls may be disabled.
+
+Formal response calibration requires a measured two-column SPD CSV. The app intentionally does not substitute simulated SPD data. Positioning, response, sample, and standard captures must use the same camera, RAW dimensions, CFA pattern, ISO, exposure time, and focus distance.
+
+## FSSA workflow
+
+1. Open **Analyze** and capture an R/G/B positioning source. The app fits B and R and validates against G.
+2. Import the standard source's true-SPD CSV and capture that source.
+3. Select a fluorophore and capture the unknown sample.
+4. Enter and capture 2–5 standards, then build the concentration curve. At least three standards are recommended.
+
+Every capture is saved as DNG even if quality control rejects its analysis. Computation remains on device.
 
 ## Install
 
