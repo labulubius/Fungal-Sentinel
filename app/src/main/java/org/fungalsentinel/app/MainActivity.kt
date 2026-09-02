@@ -403,7 +403,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startAnalysisCapture(purpose: AnalysisCapturePurpose) {
-        if (purpose != AnalysisCapturePurpose.POSITIONING && fssaState.lockedMetadata == null) {
+        if (purpose != AnalysisCapturePurpose.POSITIONING && fssaState.wavelengthCalibration == null) {
             updateFssaError("Complete wavelength calibration first.")
             return
         }
@@ -630,7 +630,7 @@ class MainActivity : ComponentActivity() {
             Log.i(logTag, "Saved DNG: $fileName")
             if (purpose != null) {
                 val profile = RawProfileExtractor.extract(image, result, cameraCharacteristics, cameraId)
-                processAnalysisCapture(purpose, profile, fileName)
+                processAnalysisCapture(purpose, profile)
             }
             showMessage("Saved: $fileName")
         } catch (e: Exception) {
@@ -644,30 +644,13 @@ class MainActivity : ComponentActivity() {
 
     private fun processAnalysisCapture(
         purpose: AnalysisCapturePurpose,
-        profile: SpectralProfile,
-        fileName: String
+        profile: SpectralProfile
     ) {
-        if (profile.saturatedFraction > 0.001) {
-            updateFssaError(
-                "Rejected $fileName: ${formatDouble(profile.saturatedFraction * 100.0)}% of ROI pixels are saturated."
-            )
-            return
-        }
         val current = fssaState
-        if (purpose != AnalysisCapturePurpose.POSITIONING) {
-            val reference = current.lockedMetadata
-            if (reference == null || !RawProfileExtractor.metadataMatches(reference, profile.metadata)) {
-                updateFssaError("Rejected $fileName: camera, ISO, exposure, focus, CFA, or RAW size differs from Step 1.")
-                return
-            }
-        }
         try {
             val next = when (purpose) {
                 AnalysisCapturePurpose.POSITIONING -> {
                     val calibration = SpectralAlgorithms.calibrateWavelength(profile)
-                    require(calibration.qualityMessage != "FAILED") {
-                        "G validation error ${formatDouble(calibration.validationErrorNm)} nm exceeds the 10 nm limit."
-                    }
                     current.copy(
                         busy = false,
                         pendingCapture = null,
@@ -678,7 +661,7 @@ class MainActivity : ComponentActivity() {
                         concentrationResult = null,
                         lockedMetadata = profile.metadata,
                         lastProfile = profile,
-                        status = "Wavelength calibration ${calibration.qualityMessage}.",
+                        status = "Wavelength calibration completed; G error ${formatDouble(calibration.validationErrorNm)} nm.",
                         logs = current.logs +
                             "Step 1: p=${formatDouble(calibration.slopePixelsPerNm)}λ+${formatDouble(calibration.interceptPixels)}, " +
                             "G error=${formatDouble(calibration.validationErrorNm)} nm, ROI=${profile.xRoi.first}..${profile.xRoi.last}."
@@ -686,7 +669,7 @@ class MainActivity : ComponentActivity() {
                 }
                 AnalysisCapturePurpose.RESPONSE -> {
                     val calibration = requireNotNull(current.wavelengthCalibration)
-                    val spd = requireNotNull(current.spdData) { "Import a true SPD CSV first." }
+                    val spd = current.spdData ?: SpectralAlgorithms.defaultSpd()
                     val response = SpectralAlgorithms.calibrateResponse(profile, calibration, spd)
                     current.copy(
                         busy = false,
@@ -696,8 +679,8 @@ class MainActivity : ComponentActivity() {
                         standards = emptyList(),
                         concentrationResult = null,
                         lastProfile = profile,
-                        status = "Spectral response generated from measured SPD.",
-                        logs = current.logs + "Step 2: calibrated R/G/B response over 420–680 nm using ${current.spdFileName}."
+                        status = "Spectral response generated.",
+                        logs = current.logs + "Step 2: calibrated R/G/B response over 420–680 nm using ${current.spdFileName ?: "simulated default SPD"}."
                     )
                 }
                 AnalysisCapturePurpose.SAMPLE -> {

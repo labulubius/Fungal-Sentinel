@@ -67,28 +67,24 @@ fun FssaPanel(
             }
             HorizontalDivider()
             Text(state.status, color = if (state.busy) Color(0xffff9800) else MaterialTheme.colorScheme.onSurface)
-            if (state.lastProfile?.saturatedFraction?.let { it > 0.001 } == true) {
-                Text("Warning: RAW ROI is saturated. Retake at a lower exposure.", color = MaterialTheme.colorScheme.error)
-            }
-
             when (state.step) {
                 AnalysisStep.POSITIONING -> {
                     Text("Capture the combined R/G/B positioning source. B and R fit the wavelength mapping; G validates it.")
                     ActionButton("Capture positioning RAW", captureReady && !state.busy) { onCapture(AnalysisCapturePurpose.POSITIONING) }
                     state.wavelengthCalibration?.let {
                         Metric("Mapping", "p = ${f(it.slopePixelsPerNm)}λ + ${f(it.interceptPixels)}")
-                        Metric("G validation", "${f(it.validationErrorNm)} nm · ${it.qualityMessage}")
+                        Metric("G validation error", "${f(it.validationErrorNm)} nm")
                         ProfileChart(state.lastProfile)
                     }
                 }
                 AnalysisStep.RESPONSE -> {
-                    Text("Import the measured true-SPD CSV, then capture the same standard light source.")
+                    Text("Optionally import a true-SPD CSV, then capture the standard light source. Without a CSV, FSSA uses its simulated default SPD.")
                     OutlinedButton(onClick = onImportSpd, enabled = !state.busy) {
-                        Text(state.spdFileName ?: "Import true SPD CSV (required)")
+                        Text(state.spdFileName ?: "Import true SPD CSV (optional)")
                     }
                     ActionButton(
                         "Capture SPD calibration RAW",
-                        captureReady && !state.busy && state.wavelengthCalibration != null && state.spdData != null
+                        captureReady && !state.busy && state.wavelengthCalibration != null
                     ) { onCapture(AnalysisCapturePurpose.RESPONSE) }
                     state.spectralResponse?.let { ResponseChart(it) }
                 }

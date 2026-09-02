@@ -8,6 +8,16 @@ import kotlin.math.min
 object SpectralAlgorithms {
     data class SpdData(val wavelengthsNm: DoubleArray, val intensity: DoubleArray)
 
+    /** Matches the optional synthetic SPD fallback used by FSSA v1.3.2. */
+    fun defaultSpd(): SpdData {
+        val wavelengths = DoubleArray(371) { 380.0 + it }
+        val intensity = DoubleArray(wavelengths.size) { i ->
+            val offset = wavelengths[i] - 550.0
+            100.0 * kotlin.math.exp(-0.002 * offset * offset / 1000.0) + 20.0
+        }
+        return SpdData(wavelengths, intensity)
+    }
+
     fun calibrateWavelength(
         profile: SpectralProfile,
         redNm: Double = 622.5,

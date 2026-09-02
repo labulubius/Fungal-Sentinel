@@ -10,7 +10,7 @@ Fungal Sentinel is an offline Android Camera2 RAW capture and fluorescence spect
 - DNG capture saved through Android MediaStore.
 - Four-step on-device FSSA workflow: wavelength calibration, true-SPD response calibration, sample analysis, and concentration regression.
 - Direct, memory-efficient extraction of one-dimensional R/G/B profiles from `RAW_SENSOR` frames.
-- Saturation rejection and capture-metadata locking across an experiment.
+- Displays calibration residuals and records RAW capture metadata for review.
 - Support for Ypet, EGFP, mCherry, CFP, and mTurquoise2.
 - Fungal Sentinel launcher icon and app name.
 
@@ -18,7 +18,7 @@ Fungal Sentinel is an offline Android Camera2 RAW capture and fluorescence spect
 
 Full functionality requires a device whose Camera2 implementation exposes `MANUAL_SENSOR` and `RAW` capabilities. Devices with partial Camera2 support can still open the app, but RAW capture or individual controls may be disabled.
 
-Formal response calibration requires a measured two-column SPD CSV. The app intentionally does not substitute simulated SPD data. Positioning, response, sample, and standard captures must use the same camera, RAW dimensions, CFA pattern, ISO, exposure time, and focus distance.
+A measured two-column SPD CSV can be imported for response calibration. As in the FSSA v1.3.2 reference program, the app uses a simulated broad-spectrum SPD when no CSV is selected. For comparable quantitative results, users should keep the camera, ISO, exposure time, focus, and optical setup unchanged.
 
 ## FSSA workflow
 

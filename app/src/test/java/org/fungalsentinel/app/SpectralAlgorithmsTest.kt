@@ -66,6 +66,14 @@ class SpectralAlgorithmsTest {
     }
 
     @Test
+    fun defaultSpdMatchesReferenceFallbackRange() {
+        val spd = SpectralAlgorithms.defaultSpd()
+        assertEquals(380.0, spd.wavelengthsNm.first(), 0.0)
+        assertEquals(750.0, spd.wavelengthsNm.last(), 0.0)
+        assertEquals(120.0, spd.intensity[170], 1e-10)
+    }
+
+    @Test
     fun csvParserSkipsHeaderSortsAndDeduplicates() {
         val parsed = SpectralAlgorithms.parseSpdCsv("Wavelength_nm,Intensity\n550,1\n420,0.5\n550,2\n680,0.4")
         assertTrue(parsed.wavelengthsNm.contentEquals(doubleArrayOf(420.0, 550.0, 680.0)))
