@@ -41,18 +41,20 @@ object SpectralAlgorithms {
         val maxSpd = points.maxOf { it[1] }
         require(maxSpd > 0.0) { "SPD contains no positive intensity." }
         val wl = DoubleArray(points.size)
+        val validMask = BooleanArray(points.size)
         val channels = Array(3) { DoubleArray(points.size) }
         points.forEachIndexed { i, p ->
             wl[i] = p[0]
-            val valid = p[0] in validRange && p[1] > maxSpd * 0.05
-            for (channel in 0..2) channels[channel][i] = if (valid) p[channel + 2] / max(p[1], 1e-6) else 0.0
+            validMask[i] = p[0] in validRange && p[1] > maxSpd * 0.05
+            for (channel in 0..2) channels[channel][i] = if (validMask[i]) p[channel + 2] / max(p[1], 1e-6) else 0.0
         }
         for (channel in channels.indices) {
             channels[channel] = movingAverage(channels[channel], 21)
+            for (i in channels[channel].indices) if (!validMask[i]) channels[channel][i] = 0.0
             val maximum = channels[channel].maxOrNull() ?: 0.0
             require(maximum > 0.0) { "${SpectralChannel.entries[channel]} response is empty." }
             for (i in channels[channel].indices) {
-                channels[channel][i] = if (wl[i] in validRange) max(0.0, channels[channel][i] / maximum) else 0.0
+                channels[channel][i] = if (validMask[i]) max(0.0, channels[channel][i] / maximum) else 0.0
             }
         }
         return SpectralResponse(wl, channels[0], channels[1], channels[2], validRange)

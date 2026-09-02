@@ -109,7 +109,11 @@ class MainActivity : ComponentActivity() {
             fssaState = fssaState.copy(
                 spdData = data,
                 spdFileName = name,
-                status = "Loaded ${data.wavelengthsNm.size} true-SPD points.",
+                spectralResponse = null,
+                sampleAnalysis = null,
+                standards = emptyList(),
+                concentrationResult = null,
+                status = "Loaded ${data.wavelengthsNm.size} true-SPD points; downstream results were cleared.",
                 logs = fssaState.logs + "SPD: loaded $name (${data.wavelengthsNm.size} points)."
             )
         } catch (error: Exception) {
@@ -271,7 +275,15 @@ class MainActivity : ComponentActivity() {
                             onCapture = ::startAnalysisCapture,
                             onImportSpd = { spdPicker.launch(arrayOf("text/csv", "text/comma-separated-values", "text/plain")) },
                             onFluorophoreChanged = {
-                                fssaState = fssaState.copy(selectedFluorophore = it, concentrationResult = null)
+                                if (it != fssaState.selectedFluorophore) {
+                                    fssaState = fssaState.copy(
+                                        selectedFluorophore = it,
+                                        sampleAnalysis = null,
+                                        standards = emptyList(),
+                                        concentrationResult = null,
+                                        status = "Fluorophore changed; sample and standards were cleared."
+                                    )
+                                }
                             },
                             onStandardConcentrationChanged = {
                                 fssaState = fssaState.copy(standardConcentrationInput = it)
