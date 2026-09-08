@@ -12,5 +12,9 @@
 local.properties
 *.apk
 dist/
+/app/release/
+__pycache__/
+*.py[cod]
+*.kate-swp
 keystore.properties
 *.jks
