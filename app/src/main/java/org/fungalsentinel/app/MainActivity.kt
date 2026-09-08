@@ -15,6 +15,7 @@ import android.hardware.camera2.DngCreator
 import android.hardware.camera2.TotalCaptureResult
 import android.media.Image
 import android.media.ImageReader
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -63,6 +64,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -95,6 +97,29 @@ class MainActivity : ComponentActivity() {
     private var controlRanges by mutableStateOf(CameraControlRanges.fallback)
     private var cameraSettings by mutableStateOf(CameraControlSettings.manualDefaults())
     private var captureReady by mutableStateOf(false)
+    private var fssaState by mutableStateOf(FssaUiState())
+
+    private val spdPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri == null) return@registerForActivityResult
+        try {
+            val text = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                ?: error("Could not read the selected file.")
+            val data = SpectralAlgorithms.parseSpdCsv(text)
+            val name = uri.lastPathSegment?.substringAfterLast('/') ?: "true_spd.csv"
+            fssaState = fssaState.copy(
+                spdData = data,
+                spdFileName = name,
+                spectralResponse = null,
+                sampleAnalysis = null,
+                standards = emptyList(),
+                concentrationResult = null,
+                status = "Loaded ${data.wavelengthsNm.size} true-SPD points; downstream results were cleared.",
+                logs = fssaState.logs + "SPD: loaded $name (${data.wavelengthsNm.size} points)."
+            )
+        } catch (error: Exception) {
+            updateFssaError("SPD import failed: ${error.message}")
+        }
+    }
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -189,6 +214,16 @@ class MainActivity : ComponentActivity() {
                         }
                     )
 
+                    Button(
+                        onClick = { fssaState = fssaState.copy(visible = true) },
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(16.dp)
+                            .background(Color.Black.copy(alpha = 0.48f))
+                    ) {
+                        Text("Analyze")
+                    }
+
                     IconButton(
                         onClick = { settingsPanelVisible = !settingsPanelVisible },
                         modifier = Modifier
@@ -219,7 +254,7 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    if (settingsPanelVisible) {
+                    if (settingsPanelVisible && !fssaState.visible) {
                         CameraSettingsPanel(
                             settings = cameraSettings,
                             ranges = controlRanges,
@@ -228,6 +263,33 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier
                                 .align(Alignment.TopCenter)
                                 .padding(start = 12.dp, top = 72.dp, end = 12.dp, bottom = 96.dp)
+                        )
+                    }
+
+                    if (fssaState.visible) {
+                        FssaPanel(
+                            state = fssaState,
+                            captureReady = captureReady && cameraSupport.canUseManualControls && cameraSettings.manualControlsEnabled,
+                            onClose = { fssaState = fssaState.copy(visible = false) },
+                            onStepChanged = { fssaState = fssaState.copy(step = it) },
+                            onCapture = ::startAnalysisCapture,
+                            onImportSpd = { spdPicker.launch(arrayOf("text/csv", "text/comma-separated-values", "text/plain")) },
+                            onFluorophoreChanged = {
+                                if (it != fssaState.selectedFluorophore) {
+                                    fssaState = fssaState.copy(
+                                        selectedFluorophore = it,
+                                        sampleAnalysis = null,
+                                        standards = emptyList(),
+                                        concentrationResult = null,
+                                        status = "Fluorophore changed; sample and standards were cleared."
+                                    )
+                                }
+                            },
+                            onStandardConcentrationChanged = {
+                                fssaState = fssaState.copy(standardConcentrationInput = it)
+                            },
+                            onCalculateConcentration = ::calculateConcentration,
+                            modifier = Modifier.padding(8.dp)
                         )
                     }
                 }
@@ -340,26 +402,55 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun startAnalysisCapture(purpose: AnalysisCapturePurpose) {
+        if (purpose != AnalysisCapturePurpose.POSITIONING && fssaState.wavelengthCalibration == null) {
+            updateFssaError("Complete wavelength calibration first.")
+            return
+        }
+        fssaState = fssaState.copy(
+            busy = true,
+            pendingCapture = purpose,
+            status = "Capturing ${purpose.name.lowercase()} RAW…"
+        )
+        captureRawDng()
+    }
+
+    private fun calculateConcentration() {
+        val sample = fssaState.sampleAnalysis ?: return updateFssaError("Analyze a sample first.")
+        try {
+            val result = SpectralAlgorithms.calculateConcentration(fssaState.standards, sample.area)
+            fssaState = fssaState.copy(
+                concentrationResult = result,
+                status = "Concentration calculated.",
+                logs = fssaState.logs +
+                    "Step 4: I=${formatDouble(result.slope)}C+${formatDouble(result.intercept)}, " +
+                    "R²=${formatDouble(result.rSquared)}, sample C=${formatDouble(result.sampleConcentration)}."
+            )
+        } catch (error: Exception) {
+            updateFssaError(error.message ?: "Concentration calculation failed.")
+        }
+    }
+
     private fun captureRawDng() {
         if (!cameraSupport.raw) {
-            showMessage("This device does not expose RAW capture.")
+            capturePreconditionFailed("This device does not expose RAW capture.")
             return
         }
 
         val camera = cameraDevice ?: run {
-            showMessage("Camera is not open.")
+            capturePreconditionFailed("Camera is not open.")
             return
         }
         val session = captureSession ?: run {
-            showMessage("Capture session is not ready.")
+            capturePreconditionFailed("Capture session is not ready.")
             return
         }
         if (!captureReady) {
-            showMessage("Camera is still preparing.")
+            capturePreconditionFailed("Camera is still preparing.")
             return
         }
         val rawSurface = rawImageReader?.surface ?: run {
-            showMessage("RAW reader is not ready.")
+            capturePreconditionFailed("RAW reader is not ready.")
             return
         }
 
@@ -392,11 +483,17 @@ class MainActivity : ComponentActivity() {
                     request: CaptureRequest,
                     failure: CaptureFailure
                 ) {
+                    updateFssaError("RAW capture failed: ${failure.reason}")
                     showMessage("RAW capture failed: ${failure.reason}")
                 }
             },
             backgroundHandler
         )
+    }
+
+    private fun capturePreconditionFailed(message: String) {
+        showMessage(message)
+        if (fssaState.pendingCapture != null) updateFssaError(message)
     }
 
     private fun applyCameraSettings(requestBuilder: CaptureRequest.Builder) {
@@ -518,17 +615,127 @@ class MainActivity : ComponentActivity() {
 
         pendingRawImage = null
         pendingCaptureResult = null
+        val purpose = fssaState.pendingCapture
 
         try {
-            val fileName = "fungal_sentinel_${System.currentTimeMillis()}.dng"
+            val prefix = when (purpose) {
+                AnalysisCapturePurpose.POSITIONING -> "positioning"
+                AnalysisCapturePurpose.RESPONSE -> "spd"
+                AnalysisCapturePurpose.SAMPLE -> "sample"
+                AnalysisCapturePurpose.STANDARD -> "standard_${fssaState.standardConcentrationInput}"
+                null -> "fungal_sentinel"
+            }.replace(Regex("[^A-Za-z0-9_.-]"), "_")
+            val fileName = "${prefix}_${System.currentTimeMillis()}.dng"
             saveDng(fileName, image, result)
             Log.i(logTag, "Saved DNG: $fileName")
+            if (purpose != null) {
+                val profile = RawProfileExtractor.extract(image, result, cameraCharacteristics, cameraId)
+                processAnalysisCapture(purpose, profile)
+            }
             showMessage("Saved: $fileName")
         } catch (e: Exception) {
-            Log.e(logTag, "DNG save failed", e)
-            showMessage("DNG save failed: ${e.message}")
+            Log.e(logTag, "DNG capture processing failed", e)
+            updateFssaError("Capture processing failed: ${e.message}")
+            showMessage("Capture processing failed: ${e.message}")
         } finally {
             image.close()
+        }
+    }
+
+    private fun processAnalysisCapture(
+        purpose: AnalysisCapturePurpose,
+        profile: SpectralProfile
+    ) {
+        val current = fssaState
+        try {
+            val next = when (purpose) {
+                AnalysisCapturePurpose.POSITIONING -> {
+                    val calibration = SpectralAlgorithms.calibrateWavelength(profile)
+                    current.copy(
+                        busy = false,
+                        pendingCapture = null,
+                        wavelengthCalibration = calibration,
+                        spectralResponse = null,
+                        sampleAnalysis = null,
+                        standards = emptyList(),
+                        concentrationResult = null,
+                        lockedMetadata = profile.metadata,
+                        lastProfile = profile,
+                        status = "Wavelength calibration completed; G error ${formatDouble(calibration.validationErrorNm)} nm.",
+                        logs = current.logs +
+                            "Step 1: p=${formatDouble(calibration.slopePixelsPerNm)}λ+${formatDouble(calibration.interceptPixels)}, " +
+                            "G error=${formatDouble(calibration.validationErrorNm)} nm, ROI=${profile.xRoi.first}..${profile.xRoi.last}."
+                    )
+                }
+                AnalysisCapturePurpose.RESPONSE -> {
+                    val calibration = requireNotNull(current.wavelengthCalibration)
+                    val spd = current.spdData ?: SpectralAlgorithms.defaultSpd()
+                    val response = SpectralAlgorithms.calibrateResponse(profile, calibration, spd)
+                    current.copy(
+                        busy = false,
+                        pendingCapture = null,
+                        spectralResponse = response,
+                        sampleAnalysis = null,
+                        standards = emptyList(),
+                        concentrationResult = null,
+                        lastProfile = profile,
+                        status = "Spectral response generated.",
+                        logs = current.logs + "Step 2: calibrated R/G/B response over 420–680 nm using ${current.spdFileName ?: "simulated default SPD"}."
+                    )
+                }
+                AnalysisCapturePurpose.SAMPLE -> {
+                    val analysis = SpectralAlgorithms.analyzeSample(
+                        profile,
+                        requireNotNull(current.wavelengthCalibration),
+                        requireNotNull(current.spectralResponse),
+                        current.selectedFluorophore
+                    )
+                    current.copy(
+                        busy = false,
+                        pendingCapture = null,
+                        sampleAnalysis = analysis,
+                        concentrationResult = null,
+                        lastProfile = profile,
+                        status = "Sample spectrum analyzed.",
+                        logs = current.logs +
+                            "Step 3: ${analysis.fluorophore.displayName}, area=${formatDouble(analysis.area)}, peak=${formatDouble(analysis.peak)}."
+                    )
+                }
+                AnalysisCapturePurpose.STANDARD -> {
+                    val concentration = current.standardConcentrationInput.toDoubleOrNull()
+                        ?: error("Enter a valid standard concentration.")
+                    val analysis = SpectralAlgorithms.analyzeSample(
+                        profile,
+                        requireNotNull(current.wavelengthCalibration),
+                        requireNotNull(current.spectralResponse),
+                        current.selectedFluorophore
+                    )
+                    current.copy(
+                        busy = false,
+                        pendingCapture = null,
+                        standards = current.standards + StandardMeasurement(concentration, analysis.area),
+                        standardConcentrationInput = "",
+                        concentrationResult = null,
+                        lastProfile = profile,
+                        status = "Standard ${current.standards.size + 1} recorded.",
+                        logs = current.logs + "Step 4 standard: C=${formatDouble(concentration)}, area=${formatDouble(analysis.area)}."
+                    )
+                }
+            }
+            runOnUiThread { fssaState = next }
+        } catch (error: Exception) {
+            updateFssaError("Analysis failed: ${error.message}")
+        }
+    }
+
+    private fun updateFssaError(message: String) {
+        runOnUiThread {
+            fssaState = fssaState.copy(
+                busy = false,
+                pendingCapture = null,
+                status = message,
+                logs = fssaState.logs + "ERROR: $message"
+            )
         }
     }
 
@@ -829,10 +1036,12 @@ private fun CameraControlSupport.summaryText(): String {
 
 private fun Boolean.status(): String = if (this) "supported" else "unsupported"
 
+private fun formatDouble(value: Double): String = String.format(Locale.US, "%.5g", value)
+
 private fun formatFloat(value: Float): String {
     return if (value >= 10f) {
         value.roundToInt().toString()
     } else {
-        String.format("%.1f", value)
+        String.format(Locale.US, "%.1f", value)
     }
 }
