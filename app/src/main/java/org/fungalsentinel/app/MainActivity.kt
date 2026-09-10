@@ -1,7 +1,6 @@
 package org.fungalsentinel.app
 
 import android.Manifest
-import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
@@ -11,16 +10,13 @@ import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureFailure
 import android.hardware.camera2.CaptureRequest
-import android.hardware.camera2.DngCreator
 import android.hardware.camera2.TotalCaptureResult
 import android.media.Image
 import android.media.ImageReader
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
-import android.provider.MediaStore
 import android.util.Log
 import android.util.Range
 import android.util.Size
@@ -49,8 +45,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import java.io.File
-import java.io.FileOutputStream
 import java.util.Locale
 import kotlin.math.max
 
@@ -642,7 +636,7 @@ class MainActivity : ComponentActivity() {
                 null -> "fungal_sentinel"
             }.replace(Regex("[^A-Za-z0-9_.-]"), "_")
             val fileName = "${prefix}_${System.currentTimeMillis()}.dng"
-            saveDng(fileName, image, result)
+            DngStorage.save(this, cameraCharacteristics, fileName, image, result)
             Log.i(logTag, "Saved DNG: $fileName")
             if (purpose != null) {
                 val profile = RawProfileExtractor.extract(image, result, cameraCharacteristics, cameraId)
@@ -752,46 +746,6 @@ class MainActivity : ComponentActivity() {
                 status = message,
                 logs = fssaState.logs + "ERROR: $message"
             )
-        }
-    }
-
-    private fun saveDng(
-        fileName: String,
-        image: Image,
-        captureResult: TotalCaptureResult
-    ) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val values = ContentValues().apply {
-                put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
-                put(MediaStore.Images.Media.MIME_TYPE, "image/x-adobe-dng")
-                put(MediaStore.Images.Media.RELATIVE_PATH, AppConstants.MEDIASTORE_DNG_DIRECTORY)
-                put(MediaStore.Images.Media.IS_PENDING, 1)
-            }
-
-            val uri = contentResolver.insert(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                values
-            ) ?: error("MediaStore insert returned null")
-
-            contentResolver.openOutputStream(uri).use { output ->
-                requireNotNull(output) { "Could not open output stream" }
-                DngCreator(cameraCharacteristics, captureResult).use { dngCreator ->
-                    dngCreator.writeImage(output, image)
-                }
-            }
-
-            values.clear()
-            values.put(MediaStore.Images.Media.IS_PENDING, 0)
-            contentResolver.update(uri, values, null, null)
-        } else {
-            val dir = File(getExternalFilesDir(null), AppConstants.LEGACY_DNG_DIRECTORY)
-            dir.mkdirs()
-            val file = File(dir, fileName)
-            FileOutputStream(file).use { output ->
-                DngCreator(cameraCharacteristics, captureResult).use { dngCreator ->
-                    dngCreator.writeImage(output, image)
-                }
-            }
         }
     }
 
