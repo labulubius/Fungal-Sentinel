@@ -35,6 +35,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -97,6 +98,7 @@ class MainActivity : ComponentActivity() {
     private var pendingCaptureResult: TotalCaptureResult? = null
 
     private var sidebarVisible by mutableStateOf(false)
+    private var sidebarDetailVisible by mutableStateOf(false)
     private var sidebarSection by mutableStateOf(SidebarSection.ANALYZE)
     private var analyzeExpanded by mutableStateOf(true)
     private var cameraSupport by mutableStateOf(CameraControlSupport(false, false, false, false, false, false))
@@ -226,7 +228,10 @@ class MainActivity : ComponentActivity() {
 
                     if (!sidebarVisible) {
                         IconButton(
-                            onClick = { sidebarVisible = true },
+                            onClick = {
+                                sidebarVisible = true
+                                sidebarDetailVisible = false
+                            },
                             modifier = Modifier
                                 .align(Alignment.TopStart)
                                 .safeDrawingPadding()
@@ -242,7 +247,13 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier
                                 .fillMaxSize()
                                 .background(Color.Black.copy(alpha = 0.34f))
-                                .clickable { sidebarVisible = false }
+                                .clickable {
+                                    if (sidebarDetailVisible) {
+                                        sidebarDetailVisible = false
+                                    } else {
+                                        sidebarVisible = false
+                                    }
+                                }
                         )
                         val captureEnabled = cameraSupport.raw && captureReady &&
                             cameraSupport.canUseManualControls && cameraSettings.manualControlsEnabled &&
@@ -258,11 +269,16 @@ class MainActivity : ComponentActivity() {
                             state = fssaState,
                             section = sidebarSection,
                             analyzeExpanded = analyzeExpanded,
+                            detailVisible = sidebarDetailVisible,
                             captureEnabled = captureEnabled,
                             settings = cameraSettings,
                             ranges = controlRanges,
                             support = cameraSupport,
-                            onClose = { sidebarVisible = false },
+                            onClose = {
+                                sidebarDetailVisible = false
+                                sidebarVisible = false
+                            },
+                            onCloseDetail = { sidebarDetailVisible = false },
                             onAnalyzeClicked = {
                                 if (sidebarSection == SidebarSection.ANALYZE) {
                                     analyzeExpanded = !analyzeExpanded
@@ -272,10 +288,18 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             onStepChanged = {
+                                val selectedAgain = sidebarSection == SidebarSection.ANALYZE &&
+                                    fssaState.step == it && sidebarDetailVisible
                                 sidebarSection = SidebarSection.ANALYZE
+                                sidebarDetailVisible = !selectedAgain
                                 fssaState = fssaState.copy(step = it)
                             },
-                            onParametersClicked = { sidebarSection = SidebarSection.PARAMETERS },
+                            onParametersClicked = {
+                                val selectedAgain = sidebarSection == SidebarSection.PARAMETERS &&
+                                    sidebarDetailVisible
+                                sidebarSection = SidebarSection.PARAMETERS
+                                sidebarDetailVisible = !selectedAgain
+                            },
                             onCapture = {
                                 val purpose = when (fssaState.step) {
                                     AnalysisStep.POSITIONING -> AnalysisCapturePurpose.POSITIONING
@@ -849,11 +873,13 @@ private fun AppSidebar(
     state: FssaUiState,
     section: SidebarSection,
     analyzeExpanded: Boolean,
+    detailVisible: Boolean,
     captureEnabled: Boolean,
     settings: CameraControlSettings,
     ranges: CameraControlRanges,
     support: CameraControlSupport,
     onClose: () -> Unit,
+    onCloseDetail: () -> Unit,
     onAnalyzeClicked: () -> Unit,
     onStepChanged: (AnalysisStep) -> Unit,
     onParametersClicked: () -> Unit,
@@ -865,108 +891,144 @@ private fun AppSidebar(
     onCalculateConcentration: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(
+    Row(
         modifier = modifier
-            .fillMaxHeight()
-            .fillMaxWidth(0.9f)
-            .widthIn(max = 460.dp)
-            .clickable { },
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 12.dp
+            .fillMaxSize()
+            .safeDrawingPadding()
     ) {
-        Column(
+        Surface(
             modifier = Modifier
-                .safeDrawingPadding()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .fillMaxHeight()
+                .fillMaxWidth(1f / 3f)
+                .clickable { },
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 12.dp
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+            Column(
+                modifier = Modifier
+                    .padding(8.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text("Fungal Sentinel", style = MaterialTheme.typography.titleLarge)
-                IconButton(onClick = onClose) { Text("×") }
-            }
-
-            Button(
-                onClick = onAnalyzeClicked,
-                modifier = Modifier.fillMaxWidth(),
-                colors = if (section == SidebarSection.ANALYZE) {
-                    ButtonDefaults.buttonColors()
-                } else {
-                    ButtonDefaults.outlinedButtonColors()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("FSSA", style = MaterialTheme.typography.titleMedium)
+                    IconButton(onClick = onClose) { Text("×") }
                 }
-            ) {
-                Text(if (analyzeExpanded) "▾  Analyze" else "▸  Analyze")
-            }
 
-            if (analyzeExpanded) {
-                AnalysisStep.entries.forEach { step ->
-                    val selected = section == SidebarSection.ANALYZE && state.step == step
-                    Button(
-                        onClick = { onStepChanged(step) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 18.dp),
-                        colors = if (selected) {
-                            ButtonDefaults.buttonColors()
-                        } else {
-                            ButtonDefaults.outlinedButtonColors()
+                Button(
+                    onClick = onAnalyzeClicked,
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                    colors = if (section == SidebarSection.ANALYZE) {
+                        ButtonDefaults.buttonColors()
+                    } else {
+                        ButtonDefaults.outlinedButtonColors()
+                    }
+                ) {
+                    Text(
+                        if (analyzeExpanded) "▾ Analyze" else "▸ Analyze",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+
+                if (analyzeExpanded) {
+                    AnalysisStep.entries.forEach { step ->
+                        val selected = section == SidebarSection.ANALYZE && state.step == step
+                        Button(
+                            onClick = { onStepChanged(step) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 8.dp),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 7.dp),
+                            colors = if (selected) {
+                                ButtonDefaults.buttonColors()
+                            } else {
+                                ButtonDefaults.outlinedButtonColors()
+                            }
+                        ) {
+                            Text(
+                                "${step.number}. ${step.title}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
+                    }
+                }
+
+                Button(
+                    onClick = onParametersClicked,
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                    colors = if (section == SidebarSection.PARAMETERS) {
+                        ButtonDefaults.buttonColors()
+                    } else {
+                        ButtonDefaults.outlinedButtonColors()
+                    }
+                ) {
+                    Text("Camera Parameters", style = MaterialTheme.typography.bodySmall)
+                }
+
+                Button(
+                    onClick = onCapture,
+                    enabled = captureEnabled,
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        disabledContainerColor = Color.DarkGray,
+                        disabledContentColor = Color.LightGray
+                    )
+                ) {
+                    Text(
+                        when {
+                            state.busy -> "Processing…"
+                            !support.raw -> "RAW Unsupported"
+                            else -> "Capture"
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+        }
+
+        if (detailVisible) {
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .padding(start = 8.dp, top = 56.dp, end = 8.dp, bottom = 12.dp)
+                    .widthIn(max = 560.dp)
+                    .clickable { },
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 16.dp,
+                shadowElevation = 12.dp
+            ) {
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
                     ) {
-                        Text("${step.number}. ${step.title}")
+                        IconButton(onClick = onCloseDetail) { Text("×") }
                     }
-                }
-            }
-
-            Button(
-                onClick = onParametersClicked,
-                modifier = Modifier.fillMaxWidth(),
-                colors = if (section == SidebarSection.PARAMETERS) {
-                    ButtonDefaults.buttonColors()
-                } else {
-                    ButtonDefaults.outlinedButtonColors()
-                }
-            ) {
-                Text("Camera Parameters")
-            }
-
-            Button(
-                onClick = onCapture,
-                enabled = captureEnabled,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    disabledContainerColor = Color.DarkGray,
-                    disabledContentColor = Color.LightGray
-                )
-            ) {
-                Text(
-                    when {
-                        state.busy -> "Processing…"
-                        !support.raw -> "RAW Unsupported"
-                        else -> "Capture · ${state.step.title}"
+                    Box(modifier = Modifier.weight(1f)) {
+                        when (section) {
+                            SidebarSection.ANALYZE -> FssaPanel(
+                                state = state,
+                                onImportSpd = onImportSpd,
+                                onFluorophoreChanged = onFluorophoreChanged,
+                                onStandardConcentrationChanged = onStandardConcentrationChanged,
+                                onCalculateConcentration = onCalculateConcentration
+                            )
+                            SidebarSection.PARAMETERS -> CameraSettingsPanel(
+                                settings = settings,
+                                ranges = ranges,
+                                support = support,
+                                onSettingsChanged = onSettingsChanged
+                            )
+                        }
                     }
-                )
-            }
-
-            HorizontalDivider()
-
-            Box(modifier = Modifier.weight(1f)) {
-                when (section) {
-                    SidebarSection.ANALYZE -> FssaPanel(
-                        state = state,
-                        onImportSpd = onImportSpd,
-                        onFluorophoreChanged = onFluorophoreChanged,
-                        onStandardConcentrationChanged = onStandardConcentrationChanged,
-                        onCalculateConcentration = onCalculateConcentration
-                    )
-                    SidebarSection.PARAMETERS -> CameraSettingsPanel(
-                        settings = settings,
-                        ranges = ranges,
-                        support = support,
-                        onSettingsChanged = onSettingsChanged
-                    )
                 }
             }
         }
