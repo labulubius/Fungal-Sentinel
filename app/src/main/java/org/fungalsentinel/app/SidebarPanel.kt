@@ -20,7 +20,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -75,13 +74,8 @@ fun AppSidebar(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("FSSA", style = MaterialTheme.typography.titleMedium)
-                    IconButton(onClick = onClose) { Text("×") }
+                IconButton(onClick = onClose) {
+                    Text("☰", style = MaterialTheme.typography.headlineSmall)
                 }
 
                 DirectoryButton(
