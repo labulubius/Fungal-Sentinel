@@ -323,19 +323,16 @@ class CameraController(
     }
 
     private fun applyCameraSettings(requestBuilder: CaptureRequest.Builder) {
-        val manualEnabled = settings.manualControlsEnabled && support.canUseManualControls
-        if (!manualEnabled) {
+        val manualExposureEnabled = settings.manualControlsEnabled && support.canUseManualControls
+        if (manualExposureEnabled) {
+            requestBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_OFF)
+            requestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+            requestBuilder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, settings.exposureTimeNs)
+            requestBuilder.set(CaptureRequest.SENSOR_SENSITIVITY, settings.iso)
+        } else {
             requestBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
             requestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-            requestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-            requestBuilder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
-            return
         }
-
-        requestBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_OFF)
-        requestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-        requestBuilder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, settings.exposureTimeNs)
-        requestBuilder.set(CaptureRequest.SENSOR_SENSITIVITY, settings.iso)
 
         if (support.manualFocus) {
             requestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)

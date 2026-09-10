@@ -54,7 +54,7 @@ fun CameraSettingsPanel(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Column {
-                    Text("Manual controls", color = Color.White, style = MaterialTheme.typography.titleMedium)
+                    Text("Manual exposure", color = Color.White, style = MaterialTheme.typography.titleMedium)
                     Text(
                         support.summaryText(),
                         color = Color.LightGray,
@@ -71,50 +71,58 @@ fun CameraSettingsPanel(
                 )
             }
 
+            if (!support.canUseManualControls) {
+                Text(
+                    "Exposure and ISO use camera auto mode. Other supported parameters and RAW capture remain available.",
+                    color = Color.LightGray,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+
             HorizontalDivider(color = Color.White.copy(alpha = 0.22f))
 
-            val controlsEnabled = settings.manualControlsEnabled && support.canUseManualControls
+            val manualExposureEnabled = settings.manualControlsEnabled && support.canUseManualControls
 
             ExposureSlider(
                 settings = settings,
                 ranges = ranges,
-                enabled = controlsEnabled,
+                enabled = manualExposureEnabled,
                 onSettingsChanged = onSettingsChanged
             )
             IsoSlider(
                 settings = settings,
                 ranges = ranges,
-                enabled = controlsEnabled,
+                enabled = manualExposureEnabled,
                 onSettingsChanged = onSettingsChanged
             )
             FocusSlider(
                 settings = settings,
                 ranges = ranges,
-                enabled = controlsEnabled && support.manualFocus,
+                enabled = support.manualFocus,
                 onSettingsChanged = onSettingsChanged
             )
             SettingSwitch(
                 label = "Auto white balance",
                 checked = settings.autoWhiteBalanceEnabled,
-                enabled = controlsEnabled,
+                enabled = true,
                 onCheckedChange = { onSettingsChanged(settings.copy(autoWhiteBalanceEnabled = it)) }
             )
             SettingSwitch(
                 label = "Noise reduction",
                 checked = settings.noiseReductionEnabled,
-                enabled = controlsEnabled && support.noiseReduction,
+                enabled = support.noiseReduction,
                 onCheckedChange = { onSettingsChanged(settings.copy(noiseReductionEnabled = it)) }
             )
             SettingSwitch(
                 label = "Edge enhancement",
                 checked = settings.edgeEnhancementEnabled,
-                enabled = controlsEnabled && support.edgeEnhancement,
+                enabled = support.edgeEnhancement,
                 onCheckedChange = { onSettingsChanged(settings.copy(edgeEnhancementEnabled = it)) }
             )
             SettingSwitch(
                 label = "Hot pixel correction",
                 checked = settings.hotPixelCorrectionEnabled,
-                enabled = controlsEnabled && support.hotPixelCorrection,
+                enabled = support.hotPixelCorrection,
                 onCheckedChange = { onSettingsChanged(settings.copy(hotPixelCorrectionEnabled = it)) }
             )
         }

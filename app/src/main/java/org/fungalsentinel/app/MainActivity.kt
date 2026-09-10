@@ -176,7 +176,6 @@ class MainActivity : ComponentActivity() {
                                 }
                         )
                         val captureEnabled = cameraSupport.raw && captureReady &&
-                            cameraSupport.canUseManualControls && cameraSettings.manualControlsEnabled &&
                             !fssaState.busy && when (fssaState.step) {
                                 AnalysisStep.POSITIONING -> true
                                 AnalysisStep.RESPONSE -> fssaState.wavelengthCalibration != null
@@ -318,15 +317,26 @@ class MainActivity : ComponentActivity() {
                 null -> "fungal_sentinel"
             }.replace(Regex("[^A-Za-z0-9_.-]"), "_")
             val fileName = "${prefix}_${System.currentTimeMillis()}.dng"
-            DngStorage.save(this, cameraCharacteristics, fileName, image, result)
-            Log.i(logTag, "Saved DNG: $fileName")
+            val dngSaveError = runCatching {
+                DngStorage.save(this, cameraCharacteristics, fileName, image, result)
+            }.exceptionOrNull()
+
             if (purpose != null) {
                 val profile = RawProfileExtractor.extract(image, result, cameraCharacteristics, cameraId)
                 if (captureToken == captureGeneration && fssaState.pendingCapture == purpose) {
                     processAnalysisCapture(purpose, profile, captureToken)
                 }
             }
-            showMessage("Saved: $fileName")
+
+            if (dngSaveError == null) {
+                Log.i(logTag, "Saved DNG: $fileName")
+                showMessage("Saved: $fileName")
+            } else if (purpose != null) {
+                Log.w(logTag, "Analysis completed but DNG saving is unavailable", dngSaveError)
+                showMessage("Analysis completed; this camera could not create a DNG file.")
+            } else {
+                throw dngSaveError
+            }
         } catch (e: Exception) {
             Log.e(logTag, "DNG capture processing failed", e)
             runOnUiThread {
