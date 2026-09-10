@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -34,10 +33,6 @@ import kotlin.math.max
 @Composable
 fun FssaPanel(
     state: FssaUiState,
-    captureReady: Boolean,
-    onClose: () -> Unit,
-    onStepChanged: (AnalysisStep) -> Unit,
-    onCapture: (AnalysisCapturePurpose) -> Unit,
     onImportSpd: () -> Unit,
     onFluorophoreChanged: (Fluorophore) -> Unit,
     onStandardConcentrationChanged: (String) -> Unit,
@@ -49,28 +44,15 @@ fun FssaPanel(
             modifier = Modifier.padding(14.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Column {
-                    Text("FSSA on-device analysis", style = MaterialTheme.typography.titleLarge)
-                    Text("v1.1 · Offline RAW workflow", style = MaterialTheme.typography.bodySmall)
-                }
-                OutlinedButton(onClick = onClose) { Text("Close") }
-            }
-            Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                AnalysisStep.entries.forEach { step ->
-                    val selected = state.step == step
-                    Button(
-                        onClick = { onStepChanged(step) },
-                        colors = if (selected) ButtonDefaults.buttonColors() else ButtonDefaults.outlinedButtonColors()
-                    ) { Text("${step.number}. ${step.title}") }
-                }
+            Column {
+                Text("${state.step.number}. ${state.step.title}", style = MaterialTheme.typography.titleLarge)
+                Text("FSSA on-device analysis · Offline RAW workflow", style = MaterialTheme.typography.bodySmall)
             }
             HorizontalDivider()
             Text(state.status, color = if (state.busy) Color(0xffff9800) else MaterialTheme.colorScheme.onSurface)
             when (state.step) {
                 AnalysisStep.POSITIONING -> {
                     Text("Capture the combined R/G/B positioning source. B and R fit the wavelength mapping; G validates it.")
-                    ActionButton("Capture positioning RAW", captureReady && !state.busy) { onCapture(AnalysisCapturePurpose.POSITIONING) }
                     state.wavelengthCalibration?.let {
                         Metric("Mapping", "p = ${f(it.slopePixelsPerNm)}λ + ${f(it.interceptPixels)}")
                         Metric("G validation error", "${f(it.validationErrorNm)} nm")
@@ -82,10 +64,6 @@ fun FssaPanel(
                     OutlinedButton(onClick = onImportSpd, enabled = !state.busy) {
                         Text(state.spdFileName ?: "Import true SPD CSV (optional)")
                     }
-                    ActionButton(
-                        "Capture SPD calibration RAW",
-                        captureReady && !state.busy && state.wavelengthCalibration != null
-                    ) { onCapture(AnalysisCapturePurpose.RESPONSE) }
                     state.spectralResponse?.let { ResponseChart(it) }
                 }
                 AnalysisStep.SAMPLE -> {
@@ -98,10 +76,6 @@ fun FssaPanel(
                         }
                     }
                     Text("Target ${state.selectedFluorophore.peakWavelengthNm.toInt()} nm · ${state.selectedFluorophore.channel}")
-                    ActionButton(
-                        "Capture and analyze sample",
-                        captureReady && !state.busy && state.spectralResponse != null
-                    ) { onCapture(AnalysisCapturePurpose.SAMPLE) }
                     state.sampleAnalysis?.let {
                         Metric("Integrated area", f(it.area))
                         Metric("Peak intensity", f(it.peak))
@@ -117,11 +91,6 @@ fun FssaPanel(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    ActionButton(
-                        "Capture standard",
-                        captureReady && !state.busy && state.spectralResponse != null &&
-                            state.standardConcentrationInput.toDoubleOrNull() != null && state.standards.size < 5
-                    ) { onCapture(AnalysisCapturePurpose.STANDARD) }
                     state.standards.forEachIndexed { index, standard ->
                         Text("Standard ${index + 1}: C=${f(standard.concentration)}, area=${f(standard.area)}")
                     }
