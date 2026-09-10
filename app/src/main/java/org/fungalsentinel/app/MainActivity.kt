@@ -320,14 +320,18 @@ class MainActivity : ComponentActivity() {
             if (purpose != null) {
                 val profile = RawProfileExtractor.extract(image, result, cameraCharacteristics, cameraId)
                 if (captureToken == captureGeneration && fssaState.pendingCapture == purpose) {
-                    processAnalysisCapture(purpose, profile)
+                    processAnalysisCapture(purpose, profile, captureToken)
                 }
             }
             showMessage("Saved: $fileName")
         } catch (e: Exception) {
             Log.e(logTag, "DNG capture processing failed", e)
-            updateFssaError("Capture processing failed: ${e.message}")
-            showMessage("Capture processing failed: ${e.message}")
+            runOnUiThread {
+                if (captureToken == captureGeneration) {
+                    updateFssaError("Capture processing failed: ${e.message}")
+                }
+                showMessage("Capture processing failed: ${e.message}")
+            }
         } finally {
             image.close()
         }
@@ -335,7 +339,8 @@ class MainActivity : ComponentActivity() {
 
     private fun processAnalysisCapture(
         purpose: AnalysisCapturePurpose,
-        profile: SpectralProfile
+        profile: SpectralProfile,
+        captureToken: Long
     ) {
         val current = fssaState
         try {
@@ -413,9 +418,17 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
-            runOnUiThread { fssaState = next }
+            runOnUiThread {
+                if (captureToken == captureGeneration && fssaState.pendingCapture == purpose) {
+                    fssaState = next
+                }
+            }
         } catch (error: Exception) {
-            updateFssaError("Analysis failed: ${error.message}")
+            runOnUiThread {
+                if (captureToken == captureGeneration && fssaState.pendingCapture == purpose) {
+                    updateFssaError("Analysis failed: ${error.message}")
+                }
+            }
         }
     }
 

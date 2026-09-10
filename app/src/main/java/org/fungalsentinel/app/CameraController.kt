@@ -56,6 +56,8 @@ class CameraController(
     private var pendingRawImage: Image? = null
     private var pendingCaptureResult: TotalCaptureResult? = null
     private var pendingCaptureToken: Long? = null
+    private var activeRawDispatches = 0
+    private val readersPendingClose = mutableListOf<ImageReader>()
     @Volatile private var lifecycleGeneration: Long = 0
 
     fun start() {
@@ -145,7 +147,7 @@ class CameraController(
         (resources[0] as? CameraCaptureSession)?.close()
         (resources[1] as? CameraDevice)?.close()
         (resources[2] as? Surface)?.release()
-        (resources[3] as? ImageReader)?.close()
+        (resources[3] as? ImageReader)?.let(::closeReaderWhenSafe)
         synchronized(rawLock) {
             pendingRawImage?.close()
             pendingRawImage = null
@@ -227,15 +229,22 @@ class CameraController(
                 setOnImageAvailableListener(
                     { reader ->
                         val image = reader.acquireNextImage()
-                        if (generation != lifecycleGeneration) {
+                        val acceptedImage = synchronized(lifecycleLock) {
+                            if (generation != lifecycleGeneration || rawImageReader !== reader) {
+                                false
+                            } else {
+                                synchronized(rawLock) {
+                                    pendingRawImage?.close()
+                                    pendingRawImage = image
+                                }
+                                true
+                            }
+                        }
+                        if (acceptedImage) {
+                            dispatchCompletedRawIfReady()
+                        } else {
                             image.close()
-                            return@setOnImageAvailableListener
                         }
-                        synchronized(rawLock) {
-                            pendingRawImage?.close()
-                            pendingRawImage = image
-                        }
-                        dispatchCompletedRawIfReady()
                     },
                     backgroundHandler
                 )
@@ -244,17 +253,21 @@ class CameraController(
             null
         }
 
+        var previousSurface: Surface? = null
+        var previousReader: ImageReader? = null
         val accepted = synchronized(lifecycleLock) {
             if (generation != lifecycleGeneration || cameraDevice !== camera) {
                 false
             } else {
-                previewSurface?.release()
-                rawImageReader?.close()
+                previousSurface = previewSurface
+                previousReader = rawImageReader
                 previewSurface = newPreviewSurface
                 rawImageReader = newRawReader
                 true
             }
         }
+        previousSurface?.release()
+        previousReader?.let(::closeReaderWhenSafe)
         if (!accepted) {
             newPreviewSurface.release()
             newRawReader?.close()
@@ -265,9 +278,7 @@ class CameraController(
             add(newPreviewSurface)
             newRawReader?.surface?.let(::add)
         }
-        camera.createCaptureSession(
-            surfaces,
-            object : CameraCaptureSession.StateCallback() {
+        val callback = object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     val accepted = synchronized(lifecycleLock) {
                         if (generation != lifecycleGeneration) {
@@ -289,9 +300,16 @@ class CameraController(
                     val current = synchronized(lifecycleLock) { generation == lifecycleGeneration }
                     if (current) onError("Preview session configuration failed.")
                 }
-            },
-            backgroundHandler
-        )
+        }
+        try {
+            synchronized(lifecycleLock) {
+                if (generation != lifecycleGeneration || cameraDevice !== camera) return
+                camera.createCaptureSession(surfaces, callback, backgroundHandler)
+            }
+        } catch (error: Exception) {
+            val current = synchronized(lifecycleLock) { generation == lifecycleGeneration }
+            if (current) onError("Preview session configuration failed: ${error.message}")
+        }
     }
 
     private fun applyRepeatingRequest() {
@@ -371,9 +389,32 @@ class CameraController(
             pendingRawImage = null
             pendingCaptureResult = null
             pendingCaptureToken = null
+            activeRawDispatches++
             Triple(image, result, token)
         } ?: return
-        onRawCaptured(completed.first, completed.second, characteristics, cameraId, completed.third)
+        try {
+            onRawCaptured(completed.first, completed.second, characteristics, cameraId, completed.third)
+        } finally {
+            val readersToClose = synchronized(rawLock) {
+                activeRawDispatches--
+                if (activeRawDispatches == 0) {
+                    readersPendingClose.toList().also { readersPendingClose.clear() }
+                } else {
+                    emptyList()
+                }
+            }
+            readersToClose.forEach(ImageReader::close)
+        }
+    }
+
+    private fun closeReaderWhenSafe(reader: ImageReader) {
+        val closeNow = synchronized(rawLock) {
+            if (activeRawDispatches == 0) true else {
+                readersPendingClose += reader
+                false
+            }
+        }
+        if (closeNow) reader.close()
     }
 
     private fun chooseRawSize(): Size {
