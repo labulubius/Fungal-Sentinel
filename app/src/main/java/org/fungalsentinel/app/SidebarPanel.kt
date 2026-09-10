@@ -28,6 +28,9 @@ import androidx.compose.ui.unit.dp
 
 enum class SidebarSection { ANALYZE, PARAMETERS }
 
+private val PanelBackground = Color.Black.copy(alpha = 0.62f)
+private val SelectedItemBackground = Color.White.copy(alpha = 0.20f)
+
 @Composable
 fun AppSidebar(
     state: FssaUiState,
@@ -61,8 +64,9 @@ fun AppSidebar(
                 .fillMaxHeight()
                 .fillMaxWidth(1f / 3f)
                 .clickable { },
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 12.dp
+            color = PanelBackground,
+            contentColor = Color.White,
+            tonalElevation = 0.dp
         ) {
             Column(
                 modifier = Modifier
@@ -83,11 +87,7 @@ fun AppSidebar(
                     onClick = onAnalyzeClicked,
                     modifier = Modifier.fillMaxWidth(),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                    colors = if (section == SidebarSection.ANALYZE) {
-                        ButtonDefaults.buttonColors()
-                    } else {
-                        ButtonDefaults.outlinedButtonColors()
-                    }
+                    colors = directoryButtonColors(section == SidebarSection.ANALYZE)
                 ) {
                     Text(
                         if (analyzeExpanded) "▾ Analyze" else "▸ Analyze",
@@ -104,11 +104,7 @@ fun AppSidebar(
                                 .fillMaxWidth()
                                 .padding(start = 8.dp),
                             contentPadding = PaddingValues(horizontal = 6.dp, vertical = 7.dp),
-                            colors = if (selected) {
-                                ButtonDefaults.buttonColors()
-                            } else {
-                                ButtonDefaults.outlinedButtonColors()
-                            }
+                            colors = directoryButtonColors(selected)
                         ) {
                             Text(
                                 "${step.number}. ${step.title}",
@@ -122,11 +118,7 @@ fun AppSidebar(
                     onClick = onParametersClicked,
                     modifier = Modifier.fillMaxWidth(),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                    colors = if (section == SidebarSection.PARAMETERS) {
-                        ButtonDefaults.buttonColors()
-                    } else {
-                        ButtonDefaults.outlinedButtonColors()
-                    }
+                    colors = directoryButtonColors(section == SidebarSection.PARAMETERS)
                 ) {
                     Text("Camera Parameters", style = MaterialTheme.typography.bodySmall)
                 }
@@ -137,8 +129,10 @@ fun AppSidebar(
                     modifier = Modifier.fillMaxWidth(),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                     colors = ButtonDefaults.buttonColors(
-                        disabledContainerColor = Color.DarkGray,
-                        disabledContentColor = Color.LightGray
+                        containerColor = SelectedItemBackground,
+                        contentColor = Color.White,
+                        disabledContainerColor = Color.White.copy(alpha = 0.10f),
+                        disabledContentColor = Color.White.copy(alpha = 0.45f)
                     )
                 ) {
                     Text(
@@ -161,8 +155,9 @@ fun AppSidebar(
                     .padding(start = 8.dp, top = 56.dp, end = 8.dp, bottom = 12.dp)
                     .widthIn(max = 560.dp)
                     .clickable { },
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 16.dp,
+                color = PanelBackground,
+                contentColor = Color.White,
+                tonalElevation = 0.dp,
                 shadowElevation = 12.dp
             ) {
                 Column {
@@ -194,3 +189,11 @@ fun AppSidebar(
         }
     }
 }
+
+@Composable
+private fun directoryButtonColors(selected: Boolean) = ButtonDefaults.buttonColors(
+    containerColor = if (selected) SelectedItemBackground else Color.Transparent,
+    contentColor = Color.White,
+    disabledContainerColor = Color.Transparent,
+    disabledContentColor = Color.White.copy(alpha = 0.38f)
+)

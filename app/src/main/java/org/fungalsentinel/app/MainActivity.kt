@@ -225,7 +225,7 @@ class MainActivity : ComponentActivity() {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.34f))
+                                .background(Color.Black.copy(alpha = 0.16f))
                                 .clickable {
                                     if (sidebarDetailVisible) {
                                         sidebarDetailVisible = false

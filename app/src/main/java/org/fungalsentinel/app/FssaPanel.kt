@@ -15,11 +15,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -39,7 +42,13 @@ fun FssaPanel(
     onCalculateConcentration: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Card(modifier = modifier.fillMaxHeight().fillMaxWidth()) {
+    Card(
+        modifier = modifier.fillMaxHeight().fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = Color.Transparent,
+            contentColor = Color.White
+        )
+    ) {
         Column(
             modifier = Modifier.padding(14.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -48,8 +57,8 @@ fun FssaPanel(
                 Text("${state.step.number}. ${state.step.title}", style = MaterialTheme.typography.titleLarge)
                 Text("FSSA on-device analysis · Offline RAW workflow", style = MaterialTheme.typography.bodySmall)
             }
-            HorizontalDivider()
-            Text(state.status, color = if (state.busy) Color(0xffff9800) else MaterialTheme.colorScheme.onSurface)
+            HorizontalDivider(color = Color.White.copy(alpha = 0.22f))
+            Text(state.status, color = if (state.busy) Color(0xffffb74d) else Color.White)
             when (state.step) {
                 AnalysisStep.POSITIONING -> {
                     Text("Capture the combined R/G/B positioning source. B and R fit the wavelength mapping; G validates it.")
@@ -61,7 +70,11 @@ fun FssaPanel(
                 }
                 AnalysisStep.RESPONSE -> {
                     Text("Optionally import a true-SPD CSV, then capture the standard light source. Without a CSV, FSSA uses its simulated default SPD.")
-                    OutlinedButton(onClick = onImportSpd, enabled = !state.busy) {
+                    OutlinedButton(
+                        onClick = onImportSpd,
+                        enabled = !state.busy,
+                        colors = analysisOutlinedButtonColors()
+                    ) {
                         Text(state.spdFileName ?: "Import true SPD CSV (optional)")
                     }
                     state.spectralResponse?.let { ResponseChart(it) }
@@ -70,7 +83,10 @@ fun FssaPanel(
                     Text("Select the fluorophore, then capture the unknown sample using the locked settings.")
                     Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Fluorophore.supported.forEach { fluor ->
-                            OutlinedButton(onClick = { onFluorophoreChanged(fluor) }) {
+                            OutlinedButton(
+                                onClick = { onFluorophoreChanged(fluor) },
+                                colors = analysisOutlinedButtonColors()
+                            ) {
                                 Text(if (fluor == state.selectedFluorophore) "✓ ${fluor.displayName}" else fluor.displayName)
                             }
                         }
@@ -89,7 +105,16 @@ fun FssaPanel(
                         onValueChange = onStandardConcentrationChanged,
                         label = { Text("Standard concentration") },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            cursorColor = Color.White,
+                            focusedBorderColor = Color.White,
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.45f),
+                            focusedLabelColor = Color.White,
+                            unfocusedLabelColor = Color.White.copy(alpha = 0.70f)
+                        )
                     )
                     state.standards.forEachIndexed { index, standard ->
                         Text("Standard ${index + 1}: C=${f(standard.concentration)}, area=${f(standard.area)}")
@@ -102,12 +127,12 @@ fun FssaPanel(
                         Metric("Curve", "I = ${f(it.slope)}C + ${f(it.intercept)}")
                         Metric("R²", f(it.rSquared))
                         Metric("Predicted concentration", f(it.sampleConcentration))
-                        if (it.outsideCalibrationRange) Text("Warning: result is outside the calibrated range.", color = MaterialTheme.colorScheme.error)
+                        if (it.outsideCalibrationRange) Text("Warning: result is outside the calibrated range.", color = Color(0xffff8a80))
                     }
                 }
             }
 
-            HorizontalDivider()
+            HorizontalDivider(color = Color.White.copy(alpha = 0.22f))
             Text("Analysis results & logs", style = MaterialTheme.typography.titleMedium)
             Text(state.logs.takeLast(12).joinToString("\n"), style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(8.dp))
@@ -117,8 +142,24 @@ fun FssaPanel(
 
 @Composable
 private fun ActionButton(text: String, enabled: Boolean, action: () -> Unit) {
-    Button(onClick = action, enabled = enabled, modifier = Modifier.fillMaxWidth()) { Text(text) }
+    Button(
+        onClick = action,
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth(),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color.White.copy(alpha = 0.20f),
+            contentColor = Color.White,
+            disabledContainerColor = Color.White.copy(alpha = 0.08f),
+            disabledContentColor = Color.White.copy(alpha = 0.35f)
+        )
+    ) { Text(text) }
 }
+
+@Composable
+private fun analysisOutlinedButtonColors() = ButtonDefaults.outlinedButtonColors(
+    contentColor = Color.White,
+    disabledContentColor = Color.White.copy(alpha = 0.35f)
+)
 
 @Composable
 private fun Metric(label: String, value: String) {
@@ -142,15 +183,16 @@ private fun ResponseChart(response: SpectralResponse) {
 
 @Composable
 private fun SpectrumChart(analysis: SampleAnalysis) {
-    LineChart(listOf(analysis.correctedIntensity to Color(0xff6a1b9a)))
+    LineChart(listOf(analysis.correctedIntensity to Color(0xff66d9ef)))
 }
 
 @Composable
 private fun LineChart(series: List<Pair<DoubleArray, Color>>) {
     val globalMax = max(1e-12, series.maxOfOrNull { it.first.maxOrNull() ?: 0.0 } ?: 1.0)
-    Canvas(modifier = Modifier.fillMaxWidth().height(180.dp).background(Color(0xfff5f5f5))) {
-        drawLine(Color.Gray, Offset(30f, 8f), Offset(30f, size.height - 22f))
-        drawLine(Color.Gray, Offset(30f, size.height - 22f), Offset(size.width - 8f, size.height - 22f))
+    Canvas(modifier = Modifier.fillMaxWidth().height(180.dp).background(Color.White.copy(alpha = 0.08f))) {
+        val axisColor = Color.White.copy(alpha = 0.60f)
+        drawLine(axisColor, Offset(30f, 8f), Offset(30f, size.height - 22f))
+        drawLine(axisColor, Offset(30f, size.height - 22f), Offset(size.width - 8f, size.height - 22f))
         series.forEach { (values, color) ->
             if (values.size < 2) return@forEach
             val path = Path()

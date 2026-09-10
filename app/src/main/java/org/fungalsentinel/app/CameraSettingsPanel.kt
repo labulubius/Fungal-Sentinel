@@ -12,8 +12,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -36,8 +38,9 @@ fun CameraSettingsPanel(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        color = Color.Black.copy(alpha = 0.78f),
-        tonalElevation = 8.dp
+        color = Color.Transparent,
+        contentColor = Color.White,
+        tonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier
@@ -63,7 +66,8 @@ fun CameraSettingsPanel(
                     enabled = support.canUseManualControls,
                     onCheckedChange = { checked ->
                         onSettingsChanged(settings.copy(manualControlsEnabled = checked))
-                    }
+                    },
+                    colors = cameraSwitchColors()
                 )
             }
 
@@ -193,14 +197,15 @@ private fun LabeledSlider(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(label, color = if (enabled) Color.White else Color.Gray)
-            Text(valueText, color = if (enabled) Color.White else Color.Gray)
+            Text(label, color = if (enabled) Color.White else Color.White.copy(alpha = 0.45f))
+            Text(valueText, color = if (enabled) Color.White else Color.White.copy(alpha = 0.45f))
         }
         Slider(
             value = value.coerceIn(valueRange),
             onValueChange = onValueChange,
             valueRange = valueRange,
-            enabled = enabled
+            enabled = enabled,
+            colors = cameraSliderColors()
         )
     }
 }
@@ -217,15 +222,38 @@ private fun SettingSwitch(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(label, color = if (enabled) Color.White else Color.Gray)
+        Text(label, color = if (enabled) Color.White else Color.White.copy(alpha = 0.45f))
         Spacer(modifier = Modifier.width(16.dp))
         Switch(
             checked = checked,
             enabled = enabled,
-            onCheckedChange = onCheckedChange
+            onCheckedChange = onCheckedChange,
+            colors = cameraSwitchColors()
         )
     }
 }
+
+@Composable
+private fun cameraSliderColors() = SliderDefaults.colors(
+    thumbColor = Color.White,
+    activeTrackColor = Color.White.copy(alpha = 0.82f),
+    inactiveTrackColor = Color.White.copy(alpha = 0.22f),
+    disabledThumbColor = Color.White.copy(alpha = 0.38f),
+    disabledActiveTrackColor = Color.White.copy(alpha = 0.28f),
+    disabledInactiveTrackColor = Color.White.copy(alpha = 0.12f)
+)
+
+@Composable
+private fun cameraSwitchColors() = SwitchDefaults.colors(
+    checkedThumbColor = Color.Black,
+    checkedTrackColor = Color.White,
+    uncheckedThumbColor = Color.White.copy(alpha = 0.72f),
+    uncheckedTrackColor = Color.White.copy(alpha = 0.18f),
+    disabledCheckedThumbColor = Color.White.copy(alpha = 0.45f),
+    disabledCheckedTrackColor = Color.White.copy(alpha = 0.18f),
+    disabledUncheckedThumbColor = Color.White.copy(alpha = 0.35f),
+    disabledUncheckedTrackColor = Color.White.copy(alpha = 0.10f)
+)
 
 private fun CameraControlSupport.summaryText(): String {
     return "Manual: ${manualSensor.status()}  RAW: ${raw.status()}  Focus: ${manualFocus.status()}"
