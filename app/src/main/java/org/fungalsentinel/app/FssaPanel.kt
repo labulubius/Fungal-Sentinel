@@ -85,6 +85,7 @@ fun FssaPanel(
                         Fluorophore.supported.forEach { fluor ->
                             OutlinedButton(
                                 onClick = { onFluorophoreChanged(fluor) },
+                                enabled = !state.busy,
                                 colors = analysisOutlinedButtonColors()
                             ) {
                                 Text(if (fluor == state.selectedFluorophore) "✓ ${fluor.displayName}" else fluor.displayName)

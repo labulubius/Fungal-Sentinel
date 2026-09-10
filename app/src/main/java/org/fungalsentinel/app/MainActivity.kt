@@ -112,6 +112,14 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        if (fssaState.pendingCapture != null) {
+            fssaState = fssaState.copy(
+                busy = false,
+                pendingCapture = null,
+                status = "Capture interrupted because the app was paused.",
+                logs = fssaState.logs + "ERROR: Capture interrupted because the app was paused."
+            )
+        }
         cameraController.close()
         cameraController.stop()
         super.onPause()
