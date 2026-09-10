@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -72,7 +73,12 @@ fun AppSidebar(
             tonalElevation = 0.dp
         ) {
             Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
-                IconButton(onClick = onClose) {
+                IconButton(
+                    onClick = onClose,
+                    modifier = Modifier
+                        .padding(start = 4.dp, top = 8.dp)
+                        .size(64.dp)
+                ) {
                     Text("☰", style = MaterialTheme.typography.headlineSmall)
                 }
 
