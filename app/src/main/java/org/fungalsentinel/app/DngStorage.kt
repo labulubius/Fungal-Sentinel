@@ -43,16 +43,21 @@ object DngStorage {
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
             ?: error("MediaStore insert returned null")
 
-        resolver.openOutputStream(uri).use { output ->
-            requireNotNull(output) { "Could not open output stream" }
-            DngCreator(cameraCharacteristics, captureResult).use { creator ->
-                creator.writeImage(output, image)
+        try {
+            resolver.openOutputStream(uri).use { output ->
+                requireNotNull(output) { "Could not open output stream" }
+                DngCreator(cameraCharacteristics, captureResult).use { creator ->
+                    creator.writeImage(output, image)
+                }
             }
-        }
 
-        values.clear()
-        values.put(MediaStore.Images.Media.IS_PENDING, 0)
-        resolver.update(uri, values, null, null)
+            values.clear()
+            values.put(MediaStore.Images.Media.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        } catch (error: Exception) {
+            resolver.delete(uri, null, null)
+            throw error
+        }
     }
 
     private fun saveToAppStorage(
