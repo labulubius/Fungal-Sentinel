@@ -2,7 +2,6 @@ package org.fungalsentinel.app
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.TotalCaptureResult
 import android.media.Image
@@ -10,7 +9,6 @@ import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.TextureView
-import android.view.ViewGroup
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -31,7 +29,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import java.util.Locale
 
@@ -129,43 +126,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Box(modifier = Modifier.fillMaxSize()) {
-                    AndroidView(
-                        modifier = Modifier.fillMaxSize(),
-                        factory = { context ->
-                            TextureView(context).apply {
-                                layoutParams = ViewGroup.LayoutParams(
-                                    ViewGroup.LayoutParams.MATCH_PARENT,
-                                    ViewGroup.LayoutParams.MATCH_PARENT
-                                )
-
-                                surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                                    override fun onSurfaceTextureAvailable(
-                                        surface: SurfaceTexture,
-                                        width: Int,
-                                        height: Int
-                                    ) {
-                                        cameraController.open(this@apply)
-                                    }
-
-                                    override fun onSurfaceTextureSizeChanged(
-                                        surface: SurfaceTexture,
-                                        width: Int,
-                                        height: Int
-                                    ) {
-                                    }
-
-                                    override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-                                        cameraController.close()
-                                        return true
-                                    }
-
-                                    override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
-                                    }
-                                }
-
-                                textureView = this
-                            }
-                        }
+                    CameraPreview(
+                        onViewCreated = { textureView = it },
+                        onSurfaceAvailable = cameraController::open,
+                        onSurfaceDestroyed = cameraController::close
                     )
 
                     if (!sidebarVisible) {
