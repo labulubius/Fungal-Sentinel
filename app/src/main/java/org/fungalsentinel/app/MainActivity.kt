@@ -2,25 +2,13 @@ package org.fungalsentinel.app
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
-import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.CameraDevice
-import android.hardware.camera2.CameraManager
-import android.hardware.camera2.CaptureFailure
-import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.TotalCaptureResult
 import android.media.Image
-import android.media.ImageReader
 import android.net.Uri
 import android.os.Bundle
-import android.os.Handler
-import android.os.HandlerThread
 import android.util.Log
-import android.util.Range
-import android.util.Size
-import android.view.Surface
 import android.view.TextureView
 import android.view.ViewGroup
 import android.widget.Toast
@@ -46,29 +34,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import java.util.Locale
-import kotlin.math.max
 
 class MainActivity : ComponentActivity() {
 
     private val logTag = "FungalSentinel"
 
-    private lateinit var cameraId: String
-
-    private lateinit var cameraManager: CameraManager
-    private lateinit var cameraCharacteristics: CameraCharacteristics
-
-    private var cameraDevice: CameraDevice? = null
-    private var captureSession: CameraCaptureSession? = null
+    private lateinit var cameraController: CameraController
     private var textureView: TextureView? = null
-    private var previewSurface: Surface? = null
-    private var rawImageReader: ImageReader? = null
-
-    private var backgroundThread: HandlerThread? = null
-    private var backgroundHandler: Handler? = null
-
-    private val rawLock = Any()
-    private var pendingRawImage: Image? = null
-    private var pendingCaptureResult: TotalCaptureResult? = null
 
     private var sidebarVisible by mutableStateOf(false)
     private var sidebarDetailVisible by mutableStateOf(false)
@@ -114,19 +86,16 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        cameraManager = getSystemService(CameraManager::class.java)
-        cameraId = cameraManager.cameraIdList.firstOrNull { id ->
-            cameraManager.getCameraCharacteristics(id)
-                .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
-        } ?: error("No back-facing camera is available.")
-        cameraCharacteristics = cameraManager.getCameraCharacteristics(cameraId)
-        cameraSupport = detectCameraSupport(cameraCharacteristics)
-        controlRanges = detectControlRanges(cameraCharacteristics)
-        cameraSettings = CameraControlSettings.manualDefaults()
-            .copy(manualControlsEnabled = cameraSupport.canUseManualControls)
-            .clampedTo(controlRanges)
-
-        startBackgroundThread()
+        cameraController = CameraController(
+            context = this,
+            onCaptureReadyChanged = ::updateCaptureReady,
+            onRawCaptured = ::handleRawCapture,
+            onError = ::handleCameraError
+        )
+        cameraSupport = cameraController.support
+        controlRanges = cameraController.ranges
+        cameraSettings = cameraController.settings
+        cameraController.start()
 
         if (hasCameraPermission()) {
             showCameraPreview()
@@ -137,17 +106,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        startBackgroundThread()
+        cameraController.start()
 
         val view = textureView
         if (hasCameraPermission() && view != null && view.isAvailable) {
-            openCamera(view)
+            cameraController.open(view)
         }
     }
 
     override fun onPause() {
-        closeCamera()
-        stopBackgroundThread()
+        cameraController.close()
+        cameraController.stop()
         super.onPause()
     }
 
@@ -175,7 +144,7 @@ class MainActivity : ComponentActivity() {
                                         width: Int,
                                         height: Int
                                     ) {
-                                        openCamera(this@apply)
+                                        cameraController.open(this@apply)
                                     }
 
                                     override fun onSurfaceTextureSizeChanged(
@@ -186,7 +155,7 @@ class MainActivity : ComponentActivity() {
                                     }
 
                                     override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-                                        closeCamera()
+                                        cameraController.close()
                                         return true
                                     }
 
@@ -307,109 +276,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @Suppress("MissingPermission")
-    private fun openCamera(view: TextureView) {
-        if (!hasCameraPermission()) return
-        if (cameraDevice != null) return
-
-        cameraManager.openCamera(
-            cameraId,
-            object : CameraDevice.StateCallback() {
-                override fun onOpened(camera: CameraDevice) {
-                    cameraDevice = camera
-                    startPreview(view)
-                }
-
-                override fun onDisconnected(camera: CameraDevice) {
-                    camera.close()
-                    cameraDevice = null
-                }
-
-                override fun onError(camera: CameraDevice, error: Int) {
-                    camera.close()
-                    cameraDevice = null
-                    showMessage("Camera open failed: $error")
-                }
-            },
-            backgroundHandler
-        )
-    }
-
-    private fun startPreview(view: TextureView) {
-        val camera = cameraDevice ?: return
-        val surfaceTexture = view.surfaceTexture ?: return
-        updateCaptureReady(false)
-
-        surfaceTexture.setDefaultBufferSize(view.width, view.height)
-        previewSurface?.release()
-        previewSurface = Surface(surfaceTexture)
-
-        rawImageReader?.close()
-        rawImageReader = if (cameraSupport.raw) {
-            val rawSize = chooseRawSize()
-            ImageReader.newInstance(
-                rawSize.width,
-                rawSize.height,
-                ImageFormat.RAW_SENSOR,
-                2
-            ).apply {
-                setOnImageAvailableListener(
-                    { reader ->
-                        val image = reader.acquireNextImage()
-                        synchronized(rawLock) {
-                            pendingRawImage?.close()
-                            pendingRawImage = image
-                            trySavePendingDngLocked()
-                        }
-                    },
-                    backgroundHandler
-                )
-            }
-        } else {
-            null
-        }
-
-        val surfaces = buildList {
-            previewSurface?.let(::add)
-            rawImageReader?.surface?.let(::add)
-        }
-
-        camera.createCaptureSession(
-            surfaces,
-            object : CameraCaptureSession.StateCallback() {
-                override fun onConfigured(session: CameraCaptureSession) {
-                    captureSession = session
-                    applyRepeatingRequest()
-                    updateCaptureReady(rawImageReader != null)
-                }
-
-                override fun onConfigureFailed(session: CameraCaptureSession) {
-                    showMessage("Preview session configuration failed.")
-                }
-            },
-            backgroundHandler
-        )
-    }
-
     private fun updateCameraSettings(next: CameraControlSettings) {
-        cameraSettings = next.clampedTo(controlRanges)
-        applyRepeatingRequest()
-    }
-
-    private fun applyRepeatingRequest() {
-        val camera = cameraDevice ?: return
-        val session = captureSession ?: return
-        val surface = previewSurface ?: return
-
-        val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-        requestBuilder.addTarget(surface)
-        applyCameraSettings(requestBuilder)
-
-        session.setRepeatingRequest(
-            requestBuilder.build(),
-            null,
-            backgroundHandler
-        )
+        cameraSettings = cameraController.updateSettings(next)
     }
 
     private fun startAnalysisCapture(purpose: AnalysisCapturePurpose) {
@@ -442,63 +310,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun captureRawDng() {
-        if (!cameraSupport.raw) {
-            capturePreconditionFailed("This device does not expose RAW capture.")
-            return
-        }
-
-        val camera = cameraDevice ?: run {
-            capturePreconditionFailed("Camera is not open.")
-            return
-        }
-        val session = captureSession ?: run {
-            capturePreconditionFailed("Capture session is not ready.")
-            return
-        }
         if (!captureReady) {
             capturePreconditionFailed("Camera is still preparing.")
             return
         }
-        val rawSurface = rawImageReader?.surface ?: run {
-            capturePreconditionFailed("RAW reader is not ready.")
-            return
-        }
-
-        synchronized(rawLock) {
-            pendingRawImage?.close()
-            pendingRawImage = null
-            pendingCaptureResult = null
-        }
-
-        val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-        requestBuilder.addTarget(rawSurface)
-        applyCameraSettings(requestBuilder)
-
-        session.capture(
-            requestBuilder.build(),
-            object : CameraCaptureSession.CaptureCallback() {
-                override fun onCaptureCompleted(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    result: TotalCaptureResult
-                ) {
-                    synchronized(rawLock) {
-                        pendingCaptureResult = result
-                        trySavePendingDngLocked()
-                    }
-                }
-
-                override fun onCaptureFailed(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    failure: CaptureFailure
-                ) {
-                    updateFssaError("RAW capture failed: ${failure.reason}")
-                    showMessage("RAW capture failed: ${failure.reason}")
-                }
-            },
-            backgroundHandler
-        )
+        cameraController.captureRaw()?.let(::capturePreconditionFailed)
     }
 
     private fun capturePreconditionFailed(message: String) {
@@ -506,125 +322,12 @@ class MainActivity : ComponentActivity() {
         if (fssaState.pendingCapture != null) updateFssaError(message)
     }
 
-    private fun applyCameraSettings(requestBuilder: CaptureRequest.Builder) {
-        val settings = cameraSettings
-        val manualEnabled = settings.manualControlsEnabled && cameraSupport.canUseManualControls
-
-        if (!manualEnabled) {
-            requestBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-            requestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-            requestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-            requestBuilder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
-            return
-        }
-
-        requestBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_OFF)
-        requestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-        requestBuilder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, settings.exposureTimeNs)
-        requestBuilder.set(CaptureRequest.SENSOR_SENSITIVITY, settings.iso)
-
-        if (cameraSupport.manualFocus) {
-            requestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-            requestBuilder.set(CaptureRequest.LENS_FOCUS_DISTANCE, settings.focusDistanceDiopters)
-        } else {
-            requestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-        }
-
-        requestBuilder.set(
-            CaptureRequest.CONTROL_AWB_MODE,
-            if (settings.autoWhiteBalanceEnabled) {
-                CaptureRequest.CONTROL_AWB_MODE_AUTO
-            } else {
-                CaptureRequest.CONTROL_AWB_MODE_OFF
-            }
-        )
-
-        if (cameraSupport.noiseReduction) {
-            requestBuilder.set(
-                CaptureRequest.NOISE_REDUCTION_MODE,
-                if (settings.noiseReductionEnabled) {
-                    CaptureRequest.NOISE_REDUCTION_MODE_FAST
-                } else {
-                    CaptureRequest.NOISE_REDUCTION_MODE_OFF
-                }
-            )
-        }
-        if (cameraSupport.edgeEnhancement) {
-            requestBuilder.set(
-                CaptureRequest.EDGE_MODE,
-                if (settings.edgeEnhancementEnabled) {
-                    CaptureRequest.EDGE_MODE_FAST
-                } else {
-                    CaptureRequest.EDGE_MODE_OFF
-                }
-            )
-        }
-        if (cameraSupport.hotPixelCorrection) {
-            requestBuilder.set(
-                CaptureRequest.HOT_PIXEL_MODE,
-                if (settings.hotPixelCorrectionEnabled) {
-                    CaptureRequest.HOT_PIXEL_MODE_FAST
-                } else {
-                    CaptureRequest.HOT_PIXEL_MODE_OFF
-                }
-            )
-        }
-    }
-
-    private fun detectCameraSupport(characteristics: CameraCharacteristics): CameraControlSupport {
-        val capabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
-            ?: intArrayOf()
-        val focusMax = characteristics.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0.0f
-        val noiseModes = characteristics.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)
-            ?: intArrayOf()
-        val edgeModes = characteristics.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)
-            ?: intArrayOf()
-        val hotPixelModes = characteristics.get(CameraCharacteristics.HOT_PIXEL_AVAILABLE_HOT_PIXEL_MODES)
-            ?: intArrayOf()
-
-        return CameraControlSupport(
-            manualSensor = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR),
-            raw = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW),
-            manualFocus = focusMax > 0.0f,
-            noiseReduction = noiseModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_OFF) &&
-                noiseModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_FAST),
-            edgeEnhancement = edgeModes.contains(CaptureRequest.EDGE_MODE_OFF) &&
-                edgeModes.contains(CaptureRequest.EDGE_MODE_FAST),
-            hotPixelCorrection = hotPixelModes.contains(CaptureRequest.HOT_PIXEL_MODE_OFF) &&
-                hotPixelModes.contains(CaptureRequest.HOT_PIXEL_MODE_FAST)
-        )
-    }
-
-    private fun detectControlRanges(characteristics: CameraCharacteristics): CameraControlRanges {
-        val exposureRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
-            ?: Range(1_000_000L, 100_000_000L)
-        val isoRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
-            ?: Range(50, 3_200)
-        val focusMax = characteristics.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 10.0f
-
-        return CameraControlRanges(
-            exposureTimeNs = exposureRange.lower..exposureRange.upper,
-            iso = isoRange.lower..isoRange.upper,
-            focusDistanceDiopters = 0.0f..max(0.0f, focusMax)
-        )
-    }
-
-    private fun chooseRawSize(): Size {
-        val streamMap = cameraCharacteristics.get(
-            CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP
-        )
-        val rawSizes = streamMap?.getOutputSizes(ImageFormat.RAW_SENSOR)
-        return rawSizes
-            ?.maxByOrNull { it.width.toLong() * it.height.toLong() }
-            ?: Size(4000, 3000)
-    }
-
-    private fun trySavePendingDngLocked() {
-        val image = pendingRawImage ?: return
-        val result = pendingCaptureResult ?: return
-
-        pendingRawImage = null
-        pendingCaptureResult = null
+    private fun handleRawCapture(
+        image: Image,
+        result: TotalCaptureResult,
+        cameraCharacteristics: CameraCharacteristics,
+        cameraId: String
+    ) {
         val purpose = fssaState.pendingCapture
 
         try {
@@ -749,41 +452,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun closeCamera() {
-        updateCaptureReady(false)
-
-        captureSession?.close()
-        captureSession = null
-
-        cameraDevice?.close()
-        cameraDevice = null
-
-        previewSurface?.release()
-        previewSurface = null
-
-        rawImageReader?.close()
-        rawImageReader = null
-
-        synchronized(rawLock) {
-            pendingRawImage?.close()
-            pendingRawImage = null
-            pendingCaptureResult = null
-        }
-    }
-
-    private fun startBackgroundThread() {
-        if (backgroundThread != null) return
-
-        backgroundThread = HandlerThread("CameraBackground").also {
-            it.start()
-            backgroundHandler = Handler(it.looper)
-        }
-    }
-
-    private fun stopBackgroundThread() {
-        backgroundThread?.quitSafely()
-        backgroundThread = null
-        backgroundHandler = null
+    private fun handleCameraError(message: String) {
+        showMessage(message)
+        if (fssaState.pendingCapture != null) updateFssaError(message)
     }
 
     private fun showMessage(message: String) {
