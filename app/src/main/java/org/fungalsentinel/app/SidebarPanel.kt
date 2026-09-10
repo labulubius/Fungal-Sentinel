@@ -3,12 +3,14 @@ package org.fungalsentinel.app
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -61,59 +63,62 @@ fun AppSidebar(
     ) {
         Surface(
             modifier = Modifier
-                .fillMaxWidth(1f / 3f)
+                .width(IntrinsicSize.Max)
+                .widthIn(min = 160.dp, max = 220.dp)
                 .clickable { },
             shape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp),
             color = PanelBackground,
             contentColor = Color.White,
             tonalElevation = 0.dp
         ) {
-            Column(
-                modifier = Modifier
-                    .padding(8.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
+            Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
                 IconButton(onClick = onClose) {
                     Text("☰", style = MaterialTheme.typography.headlineSmall)
                 }
 
-                DirectoryButton(
-                    text = if (analyzeExpanded) "▾ Analyze" else "▸ Analyze",
-                    selected = section == SidebarSection.ANALYZE,
-                    onClick = onAnalyzeClicked
-                )
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    DirectoryButton(
+                        text = if (analyzeExpanded) "▾ Analyze" else "▸ Analyze",
+                        selected = section == SidebarSection.ANALYZE,
+                        onClick = onAnalyzeClicked
+                    )
 
-                if (analyzeExpanded) {
-                    AnalysisStep.entries.forEach { step ->
-                        DirectoryButton(
-                            text = "${step.number}. ${step.title}",
-                            selected = section == SidebarSection.ANALYZE && state.step == step,
-                            indent = 8.dp,
-                            smallText = true,
-                            onClick = { onStepChanged(step) }
-                        )
+                    if (analyzeExpanded) {
+                        AnalysisStep.entries.forEach { step ->
+                            DirectoryButton(
+                                text = "${step.number}. ${step.title}",
+                                selected = section == SidebarSection.ANALYZE && state.step == step,
+                                indent = 8.dp,
+                                smallText = true,
+                                onClick = { onStepChanged(step) }
+                            )
+                        }
                     }
+
+                    DirectoryButton(
+                        text = "Camera Parameters",
+                        selected = section == SidebarSection.PARAMETERS,
+                        smallText = true,
+                        onClick = onParametersClicked
+                    )
+
+                    DirectoryButton(
+                        text = when {
+                            state.busy -> "Processing…"
+                            !support.raw -> "RAW Unsupported"
+                            else -> "Capture"
+                        },
+                        selected = false,
+                        enabled = captureEnabled,
+                        colors = captureButtonColors(),
+                        onClick = onCapture
+                    )
                 }
-
-                DirectoryButton(
-                    text = "Camera Parameters",
-                    selected = section == SidebarSection.PARAMETERS,
-                    smallText = true,
-                    onClick = onParametersClicked
-                )
-
-                DirectoryButton(
-                    text = when {
-                        state.busy -> "Processing…"
-                        !support.raw -> "RAW Unsupported"
-                        else -> "Capture"
-                    },
-                    selected = false,
-                    enabled = captureEnabled,
-                    colors = captureButtonColors(),
-                    onClick = onCapture
-                )
             }
         }
 
@@ -168,7 +173,7 @@ private fun DirectoryButton(
             .fillMaxWidth()
             .padding(start = indent),
         shape = MaterialTheme.shapes.medium,
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
         colors = colors
     ) {
         Text(
