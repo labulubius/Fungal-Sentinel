@@ -74,7 +74,7 @@ class MainActivity : ComponentActivity() {
 
     private val logTag = "FungalSentinel"
 
-    private val cameraId = "0"
+    private lateinit var cameraId: String
 
     private lateinit var cameraManager: CameraManager
     private lateinit var cameraCharacteristics: CameraCharacteristics
@@ -134,6 +134,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         cameraManager = getSystemService(CameraManager::class.java)
+        cameraId = cameraManager.cameraIdList.firstOrNull { id ->
+            cameraManager.getCameraCharacteristics(id)
+                .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+        } ?: error("No back-facing camera is available.")
         cameraCharacteristics = cameraManager.getCameraCharacteristics(cameraId)
         cameraSupport = detectCameraSupport(cameraCharacteristics)
         controlRanges = detectControlRanges(cameraCharacteristics)
