@@ -24,7 +24,7 @@ import kotlin.math.max
 class CameraController(
     context: Context,
     private val onCaptureReadyChanged: (Boolean) -> Unit,
-    private val onRawCaptured: (Image, TotalCaptureResult, CameraCharacteristics, String) -> Unit,
+    private val onRawCaptured: (Image, TotalCaptureResult, CameraCharacteristics, String, Long) -> Unit,
     private val onError: (String) -> Unit
 ) {
     private val cameraManager = context.getSystemService(CameraManager::class.java)
@@ -43,8 +43,9 @@ class CameraController(
         .clampedTo(ranges)
         private set
 
+    private val lifecycleLock = Any()
     private var cameraDevice: CameraDevice? = null
-    @Volatile private var opening = false
+    private var opening = false
     private var captureSession: CameraCaptureSession? = null
     private var previewSurface: Surface? = null
     private var rawImageReader: ImageReader? = null
@@ -54,6 +55,7 @@ class CameraController(
     private val rawLock = Any()
     private var pendingRawImage: Image? = null
     private var pendingCaptureResult: TotalCaptureResult? = null
+    private var pendingCaptureToken: Long? = null
     @Volatile private var lifecycleGeneration: Long = 0
 
     fun start() {
@@ -75,34 +77,53 @@ class CameraController(
 
     @SuppressLint("MissingPermission")
     fun open(view: TextureView) {
-        if (cameraDevice != null || opening) return
-        opening = true
-        val generation = ++lifecycleGeneration
+        val generation = synchronized(lifecycleLock) {
+            if (cameraDevice != null || opening) return
+            opening = true
+            ++lifecycleGeneration
+        }
         cameraManager.openCamera(
             cameraId,
             object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
-                    opening = false
-                    if (generation != lifecycleGeneration) {
+                    val accepted = synchronized(lifecycleLock) {
+                        if (generation != lifecycleGeneration) {
+                            false
+                        } else {
+                            opening = false
+                            cameraDevice = camera
+                            true
+                        }
+                    }
+                    if (!accepted) {
                         camera.close()
                         return
                     }
-                    cameraDevice = camera
                     startPreview(view, generation)
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
-                    opening = false
                     camera.close()
-                    if (generation == lifecycleGeneration) cameraDevice = null
+                    synchronized(lifecycleLock) {
+                        if (generation == lifecycleGeneration) {
+                            opening = false
+                            if (cameraDevice === camera) cameraDevice = null
+                        }
+                    }
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
-                    opening = false
                     camera.close()
-                    if (generation != lifecycleGeneration) return
-                    cameraDevice = null
-                    onError("Camera open failed: $error")
+                    val current = synchronized(lifecycleLock) {
+                        if (generation != lifecycleGeneration) {
+                            false
+                        } else {
+                            opening = false
+                            if (cameraDevice === camera) cameraDevice = null
+                            true
+                        }
+                    }
+                    if (current) onError("Camera open failed: $error")
                 }
             },
             backgroundHandler
@@ -110,21 +131,26 @@ class CameraController(
     }
 
     fun close() {
-        lifecycleGeneration++
-        opening = false
+        val resources = synchronized(lifecycleLock) {
+            lifecycleGeneration++
+            opening = false
+            val current = listOf(captureSession, cameraDevice, previewSurface, rawImageReader)
+            captureSession = null
+            cameraDevice = null
+            previewSurface = null
+            rawImageReader = null
+            current
+        }
         onCaptureReadyChanged(false)
-        captureSession?.close()
-        captureSession = null
-        cameraDevice?.close()
-        cameraDevice = null
-        previewSurface?.release()
-        previewSurface = null
-        rawImageReader?.close()
-        rawImageReader = null
+        (resources[0] as? CameraCaptureSession)?.close()
+        (resources[1] as? CameraDevice)?.close()
+        (resources[2] as? Surface)?.release()
+        (resources[3] as? ImageReader)?.close()
         synchronized(rawLock) {
             pendingRawImage?.close()
             pendingRawImage = null
             pendingCaptureResult = null
+            pendingCaptureToken = null
         }
     }
 
@@ -134,7 +160,7 @@ class CameraController(
         return settings
     }
 
-    fun captureRaw(): String? {
+    fun captureRaw(captureToken: Long): String? {
         if (!support.raw) return "This device does not expose RAW capture."
         val camera = cameraDevice ?: return "Camera is not open."
         val session = captureSession ?: return "Capture session is not ready."
@@ -144,6 +170,7 @@ class CameraController(
             pendingRawImage?.close()
             pendingRawImage = null
             pendingCaptureResult = null
+            pendingCaptureToken = captureToken
         }
 
         val generation = lifecycleGeneration
@@ -169,6 +196,12 @@ class CameraController(
                     failure: CaptureFailure
                 ) {
                     if (generation == lifecycleGeneration) {
+                        synchronized(rawLock) {
+                            pendingRawImage?.close()
+                            pendingRawImage = null
+                            pendingCaptureResult = null
+                            pendingCaptureToken = null
+                        }
                         onError("RAW capture failed: ${failure.reason}")
                     }
                 }
@@ -179,16 +212,16 @@ class CameraController(
     }
 
     private fun startPreview(view: TextureView, generation: Long) {
-        val camera = cameraDevice ?: return
+        val camera = synchronized(lifecycleLock) {
+            if (generation != lifecycleGeneration) return
+            cameraDevice ?: return
+        }
         val surfaceTexture = view.surfaceTexture ?: return
         onCaptureReadyChanged(false)
 
         surfaceTexture.setDefaultBufferSize(view.width, view.height)
-        previewSurface?.release()
-        previewSurface = Surface(surfaceTexture)
-
-        rawImageReader?.close()
-        rawImageReader = if (support.raw) {
+        val newPreviewSurface = Surface(surfaceTexture)
+        val newRawReader = if (support.raw) {
             val rawSize = chooseRawSize()
             ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 2).apply {
                 setOnImageAvailableListener(
@@ -211,27 +244,50 @@ class CameraController(
             null
         }
 
+        val accepted = synchronized(lifecycleLock) {
+            if (generation != lifecycleGeneration || cameraDevice !== camera) {
+                false
+            } else {
+                previewSurface?.release()
+                rawImageReader?.close()
+                previewSurface = newPreviewSurface
+                rawImageReader = newRawReader
+                true
+            }
+        }
+        if (!accepted) {
+            newPreviewSurface.release()
+            newRawReader?.close()
+            return
+        }
+
         val surfaces = buildList {
-            previewSurface?.let(::add)
-            rawImageReader?.surface?.let(::add)
+            add(newPreviewSurface)
+            newRawReader?.surface?.let(::add)
         }
         camera.createCaptureSession(
             surfaces,
             object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
-                    if (generation != lifecycleGeneration) {
+                    val accepted = synchronized(lifecycleLock) {
+                        if (generation != lifecycleGeneration) {
+                            false
+                        } else {
+                            captureSession = session
+                            true
+                        }
+                    }
+                    if (!accepted) {
                         session.close()
                         return
                     }
-                    captureSession = session
                     applyRepeatingRequest()
                     onCaptureReadyChanged(rawImageReader != null)
                 }
 
                 override fun onConfigureFailed(session: CameraCaptureSession) {
-                    if (generation == lifecycleGeneration) {
-                        onError("Preview session configuration failed.")
-                    }
+                    val current = synchronized(lifecycleLock) { generation == lifecycleGeneration }
+                    if (current) onError("Preview session configuration failed.")
                 }
             },
             backgroundHandler
@@ -301,6 +357,7 @@ class CameraController(
         val completed = synchronized(rawLock) {
             val image = pendingRawImage ?: return@synchronized null
             val result = pendingCaptureResult ?: return@synchronized null
+            val token = pendingCaptureToken ?: return@synchronized null
             val resultTimestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
             if (resultTimestamp != null && image.timestamp != resultTimestamp) {
                 if (image.timestamp < resultTimestamp) {
@@ -313,9 +370,10 @@ class CameraController(
             }
             pendingRawImage = null
             pendingCaptureResult = null
-            image to result
+            pendingCaptureToken = null
+            Triple(image, result, token)
         } ?: return
-        onRawCaptured(completed.first, completed.second, characteristics, cameraId)
+        onRawCaptured(completed.first, completed.second, characteristics, cameraId, completed.third)
     }
 
     private fun chooseRawSize(): Size {

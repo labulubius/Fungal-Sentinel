@@ -47,6 +47,7 @@ class MainActivity : ComponentActivity() {
     private var controlRanges by mutableStateOf(CameraControlRanges.fallback)
     private var cameraSettings by mutableStateOf(CameraControlSettings.manualDefaults())
     private var captureReady by mutableStateOf(false)
+    private var captureGeneration = 0L
     private var fssaState by mutableStateOf(FssaUiState())
 
     private val spdPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
@@ -113,6 +114,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         if (fssaState.pendingCapture != null) {
+            captureGeneration++
             fssaState = fssaState.copy(
                 busy = false,
                 pendingCapture = null,
@@ -257,12 +259,13 @@ class MainActivity : ComponentActivity() {
             updateFssaError("Complete wavelength calibration first.")
             return
         }
+        captureGeneration++
         fssaState = fssaState.copy(
             busy = true,
             pendingCapture = purpose,
             status = "Capturing ${purpose.name.lowercase()} RAW…"
         )
-        captureRawDng()
+        captureRawDng(captureGeneration)
     }
 
     private fun calculateConcentration() {
@@ -281,12 +284,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun captureRawDng() {
+    private fun captureRawDng(captureToken: Long) {
         if (!captureReady) {
             capturePreconditionFailed("Camera is still preparing.")
             return
         }
-        cameraController.captureRaw()?.let(::capturePreconditionFailed)
+        cameraController.captureRaw(captureToken)?.let(::capturePreconditionFailed)
     }
 
     private fun capturePreconditionFailed(message: String) {
@@ -298,9 +301,10 @@ class MainActivity : ComponentActivity() {
         image: Image,
         result: TotalCaptureResult,
         cameraCharacteristics: CameraCharacteristics,
-        cameraId: String
+        cameraId: String,
+        captureToken: Long
     ) {
-        val purpose = fssaState.pendingCapture
+        val purpose = if (captureToken == captureGeneration) fssaState.pendingCapture else null
 
         try {
             val prefix = when (purpose) {
@@ -315,7 +319,9 @@ class MainActivity : ComponentActivity() {
             Log.i(logTag, "Saved DNG: $fileName")
             if (purpose != null) {
                 val profile = RawProfileExtractor.extract(image, result, cameraCharacteristics, cameraId)
-                processAnalysisCapture(purpose, profile)
+                if (captureToken == captureGeneration && fssaState.pendingCapture == purpose) {
+                    processAnalysisCapture(purpose, profile)
+                }
             }
             showMessage("Saved: $fileName")
         } catch (e: Exception) {

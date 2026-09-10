@@ -106,6 +106,7 @@ fun FssaPanel(
                         onValueChange = onStandardConcentrationChanged,
                         label = { Text("Standard concentration") },
                         singleLine = true,
+                        enabled = !state.busy,
                         modifier = Modifier.fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedTextColor = Color.White,
