@@ -194,7 +194,6 @@ class MainActivity : ComponentActivity() {
                                 sidebarDetailVisible = false
                                 sidebarVisible = false
                             },
-                            onCloseDetail = { sidebarDetailVisible = false },
                             onAnalyzeClicked = {
                                 if (sidebarSection == SidebarSection.ANALYZE) {
                                     analyzeExpanded = !analyzeExpanded
