@@ -18,12 +18,12 @@ Fungal Sentinel is an offline Android Camera2 RAW capture and fluorescence spect
 
 Full functionality requires a device whose Camera2 implementation exposes `MANUAL_SENSOR` and `RAW` capabilities. Devices with partial Camera2 support can still open the app, but RAW capture or individual controls may be disabled.
 
-A measured two-column SPD CSV can be imported for response calibration. As in the FSSA v1.3.2 reference program, the app uses a simulated broad-spectrum SPD when no CSV is selected. For comparable quantitative results, users should keep the camera, ISO, exposure time, focus, and optical setup unchanged.
+A measured two-column SPD CSV can be imported for response calibration. The app now loads a bundled `true_spd.csv` by default and lets users restore it after selecting a custom file. The bundled curve is valid only with the characterized light source from which it was measured. For comparable quantitative results, keep the camera, ISO, exposure time, focus, and optical setup unchanged; the app rejects downstream captures whose RAW metadata differs from the calibration capture.
 
 ## FSSA workflow
 
 1. Open **Analyze** and capture an R/G/B positioning source. The app fits B and R and validates against G.
-2. Import the standard source's true-SPD CSV and capture that source.
+2. Use the bundled SPD with its matching characterized source, or import that source's true-SPD CSV, then capture the source.
 3. Select a fluorophore and capture the unknown sample.
 4. Enter and capture 2–5 standards, then build the concentration curve. At least three standards are recommended.
 
