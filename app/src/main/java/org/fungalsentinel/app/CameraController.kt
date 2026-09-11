@@ -17,6 +17,7 @@ import android.media.Image
 import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.util.Range
 import android.util.Size
 import android.view.Surface
@@ -28,7 +29,8 @@ class CameraController(
     context: Context,
     private val onCaptureReadyChanged: (Boolean) -> Unit,
     private val onRawCaptured: (Image, TotalCaptureResult, CameraCharacteristics, String, Long) -> Unit,
-    private val onError: (String) -> Unit
+    private val onError: (String) -> Unit,
+    private val onExposureStatusChanged: (ExposureStatus) -> Unit = {}
 ) {
     private val cameraManager = context.getSystemService(CameraManager::class.java)
 
@@ -41,10 +43,15 @@ class CameraController(
     val support: CameraControlSupport = detectCameraSupport(characteristics)
     val ranges: CameraControlRanges = detectControlRanges(characteristics)
 
+    @Volatile
     var settings: CameraControlSettings = CameraControlSettings.manualDefaults()
         .copy(manualControlsEnabled = support.canUseManualControls)
         .clampedTo(ranges)
         private set
+
+    @Volatile private var autoExposureState = AutoExposureState()
+    private val controlLock = Any()
+    private var controlRevision = 0L
 
     private val lifecycleLock = Any()
     private var cameraDevice: CameraDevice? = null
@@ -110,12 +117,16 @@ class CameraController(
 
                 override fun onDisconnected(camera: CameraDevice) {
                     camera.close()
-                    synchronized(lifecycleLock) {
+                    val current = synchronized(lifecycleLock) {
                         if (generation == lifecycleGeneration) {
                             opening = false
                             if (cameraDevice === camera) cameraDevice = null
+                            true
+                        } else {
+                            false
                         }
                     }
+                    if (current) resetAutoExposureLock()
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
@@ -129,7 +140,10 @@ class CameraController(
                             true
                         }
                     }
-                    if (current) onError("Camera open failed: $error")
+                    if (current) {
+                        resetAutoExposureLock()
+                        onError("Camera open failed: $error")
+                    }
                 }
             },
             backgroundHandler
@@ -149,6 +163,7 @@ class CameraController(
             current
         }
         onCaptureReadyChanged(false)
+        resetAutoExposureLock()
         (resources[0] as? CameraCaptureSession)?.close()
         (resources[1] as? CameraDevice)?.close()
         (resources[2] as? Surface)?.release()
@@ -162,9 +177,20 @@ class CameraController(
     }
 
     fun updateSettings(next: CameraControlSettings): CameraControlSettings {
-        settings = next.clampedTo(ranges)
+        val current = synchronized(controlLock) {
+            val previous = settings
+            settings = next.clampedTo(ranges)
+            if (previous.manualControlsEnabled != settings.manualControlsEnabled ||
+                previous.meterThenLockEnabled != settings.meterThenLockEnabled
+            ) {
+                autoExposureState = autoExposureState.reset()
+            }
+            controlRevision++
+            settings
+        }
+        notifyExposureStatus()
         applyRepeatingRequest()
-        return settings
+        return current
     }
 
     fun updatePreviewTransform(view: TextureView) {
@@ -195,6 +221,11 @@ class CameraController(
 
     fun captureRaw(captureToken: Long): String? {
         if (!support.raw) return "This device does not expose RAW capture."
+        val exposureSnapshot = controlSnapshot()
+        if (!exposureSnapshot.settings.manualControlsEnabled &&
+            exposureSnapshot.settings.meterThenLockEnabled && support.autoExposureLock &&
+            !exposureSnapshot.autoExposureState.locked
+        ) return "Wait for auto exposure to finish locking."
         val camera = cameraDevice ?: return "Camera is not open."
         val session = captureSession ?: return "Capture session is not ready."
         val rawSurface = rawImageReader?.surface ?: return "RAW reader is not ready."
@@ -209,7 +240,8 @@ class CameraController(
         val generation = lifecycleGeneration
         val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
         requestBuilder.addTarget(rawSurface)
-        applyCameraSettings(requestBuilder)
+        val controlSnapshot = controlSnapshot()
+        applyCameraSettings(requestBuilder, controlSnapshot.settings, controlSnapshot.autoExposureState)
         session.capture(
             requestBuilder.build(),
             object : CameraCaptureSession.CaptureCallback() {
@@ -351,59 +383,151 @@ class CameraController(
     }
 
     private fun applyRepeatingRequest() {
-        val camera = cameraDevice ?: return
-        val session = captureSession ?: return
-        val surface = previewSurface ?: return
-        val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-        requestBuilder.addTarget(surface)
-        applyCameraSettings(requestBuilder)
-        session.setRepeatingRequest(requestBuilder.build(), null, backgroundHandler)
+        val handler = backgroundHandler ?: return
+        if (Looper.myLooper() != handler.looper) {
+            handler.post(::applyRepeatingRequest)
+            return
+        }
+        val (camera, session, surface, generation) = synchronized(lifecycleLock) {
+            val currentCamera = cameraDevice ?: return
+            val currentSession = captureSession ?: return
+            val currentSurface = previewSurface ?: return
+            PreviewResources(currentCamera, currentSession, currentSurface, lifecycleGeneration)
+        }
+        val snapshot = controlSnapshot()
+        try {
+            val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+            requestBuilder.addTarget(surface)
+            applyCameraSettings(requestBuilder, snapshot.settings, snapshot.autoExposureState)
+            val request = requestBuilder.build()
+            val callback = object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(
+                    session: CameraCaptureSession,
+                    request: CaptureRequest,
+                    result: TotalCaptureResult
+                ) {
+                    val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
+                    val stateChanged = synchronized(controlLock) {
+                        if (generation != lifecycleGeneration || snapshot.revision != controlRevision) {
+                            return@synchronized false
+                        }
+                        val nextState = when {
+                            snapshot.autoExposureState.lockRequested &&
+                                aeState == CaptureResult.CONTROL_AE_STATE_LOCKED ->
+                                autoExposureState.onLockConfirmed(settings, support)
+                            !snapshot.autoExposureState.lockRequested &&
+                                (aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED ||
+                                    aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED) ->
+                                autoExposureState.onAeStable(settings, support)
+                            else -> autoExposureState
+                        }
+                        if (nextState == autoExposureState) return@synchronized false
+                        autoExposureState = nextState
+                        controlRevision++
+                        true
+                    }
+                    if (stateChanged) {
+                        notifyExposureStatus()
+                        applyRepeatingRequest()
+                    }
+                }
+            }
+            synchronized(lifecycleLock) {
+                if (generation != lifecycleGeneration || captureSession !== session || previewSurface !== surface) return
+                session.setRepeatingRequest(request, callback, handler)
+            }
+            notifyExposureStatus()
+        } catch (error: Exception) {
+            val current = synchronized(lifecycleLock) {
+                generation == lifecycleGeneration && captureSession === session
+            }
+            if (current) onError("Preview request failed: ${error.message}")
+        }
     }
 
-    private fun applyCameraSettings(requestBuilder: CaptureRequest.Builder) {
-        val manualExposureEnabled = settings.manualControlsEnabled && support.canUseManualControls
+    private fun applyCameraSettings(
+        requestBuilder: CaptureRequest.Builder,
+        currentSettings: CameraControlSettings,
+        currentAutoExposureState: AutoExposureState
+    ) {
+        val manualExposureEnabled = currentSettings.manualControlsEnabled && support.canUseManualControls
+        // CONTROL_MODE stays AUTO so AF/AWB/post-processing remain independently controllable.
+        requestBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
         if (manualExposureEnabled) {
-            requestBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_OFF)
             requestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-            requestBuilder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, settings.exposureTimeNs)
-            requestBuilder.set(CaptureRequest.SENSOR_SENSITIVITY, settings.iso)
+            requestBuilder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, currentSettings.exposureTimeNs)
+            requestBuilder.set(CaptureRequest.SENSOR_SENSITIVITY, currentSettings.iso)
         } else {
-            requestBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
             requestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+        }
+        if (support.autoExposureLock) {
+            requestBuilder.set(
+                CaptureRequest.CONTROL_AE_LOCK,
+                !manualExposureEnabled && currentSettings.meterThenLockEnabled &&
+                    currentAutoExposureState.lockRequested
+            )
         }
 
         if (support.manualFocus) {
             requestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-            requestBuilder.set(CaptureRequest.LENS_FOCUS_DISTANCE, settings.focusDistanceDiopters)
+            requestBuilder.set(CaptureRequest.LENS_FOCUS_DISTANCE, currentSettings.focusDistanceDiopters)
         } else {
-            requestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+            safeAutoFocusMode()?.let { requestBuilder.set(CaptureRequest.CONTROL_AF_MODE, it) }
         }
         requestBuilder.set(
             CaptureRequest.CONTROL_AWB_MODE,
-            if (settings.autoWhiteBalanceEnabled) CaptureRequest.CONTROL_AWB_MODE_AUTO
+            if (currentSettings.autoWhiteBalanceEnabled) CaptureRequest.CONTROL_AWB_MODE_AUTO
             else CaptureRequest.CONTROL_AWB_MODE_OFF
         )
         if (support.noiseReduction) {
             requestBuilder.set(
                 CaptureRequest.NOISE_REDUCTION_MODE,
-                if (settings.noiseReductionEnabled) CaptureRequest.NOISE_REDUCTION_MODE_FAST
+                if (currentSettings.noiseReductionEnabled) CaptureRequest.NOISE_REDUCTION_MODE_FAST
                 else CaptureRequest.NOISE_REDUCTION_MODE_OFF
             )
         }
         if (support.edgeEnhancement) {
             requestBuilder.set(
                 CaptureRequest.EDGE_MODE,
-                if (settings.edgeEnhancementEnabled) CaptureRequest.EDGE_MODE_FAST
+                if (currentSettings.edgeEnhancementEnabled) CaptureRequest.EDGE_MODE_FAST
                 else CaptureRequest.EDGE_MODE_OFF
             )
         }
         if (support.hotPixelCorrection) {
             requestBuilder.set(
                 CaptureRequest.HOT_PIXEL_MODE,
-                if (settings.hotPixelCorrectionEnabled) CaptureRequest.HOT_PIXEL_MODE_FAST
+                if (currentSettings.hotPixelCorrectionEnabled) CaptureRequest.HOT_PIXEL_MODE_FAST
                 else CaptureRequest.HOT_PIXEL_MODE_OFF
             )
         }
+    }
+
+    private fun safeAutoFocusMode(): Int? {
+        val available = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+        return listOf(
+            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
+            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO,
+            CaptureRequest.CONTROL_AF_MODE_AUTO,
+            CaptureRequest.CONTROL_AF_MODE_OFF
+        ).firstOrNull(available::contains)
+    }
+
+    private fun resetAutoExposureLock() {
+        synchronized(controlLock) {
+            autoExposureState = autoExposureState.reset()
+            // Invalidates convergence callbacks from requests issued before a reset.
+            controlRevision++
+        }
+        notifyExposureStatus()
+    }
+
+    private fun controlSnapshot(): ControlSnapshot = synchronized(controlLock) {
+        ControlSnapshot(settings, autoExposureState, controlRevision)
+    }
+
+    private fun notifyExposureStatus() {
+        val snapshot = controlSnapshot()
+        onExposureStatusChanged(snapshot.autoExposureState.status(snapshot.settings, support))
     }
 
     private fun dispatchCompletedRawIfReady() {
@@ -500,19 +624,21 @@ class CameraController(
     private fun detectCameraSupport(characteristics: CameraCharacteristics): CameraControlSupport {
         val capabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
         val focusMax = characteristics.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0.0f
+        val afModes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
         val noiseModes = characteristics.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES) ?: intArrayOf()
         val edgeModes = characteristics.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES) ?: intArrayOf()
         val hotPixelModes = characteristics.get(CameraCharacteristics.HOT_PIXEL_AVAILABLE_HOT_PIXEL_MODES) ?: intArrayOf()
         return CameraControlSupport(
             manualSensor = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR),
             raw = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW),
-            manualFocus = focusMax > 0.0f,
+            manualFocus = focusMax > 0.0f && afModes.contains(CaptureRequest.CONTROL_AF_MODE_OFF),
             noiseReduction = noiseModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_OFF) &&
                 noiseModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_FAST),
             edgeEnhancement = edgeModes.contains(CaptureRequest.EDGE_MODE_OFF) &&
                 edgeModes.contains(CaptureRequest.EDGE_MODE_FAST),
             hotPixelCorrection = hotPixelModes.contains(CaptureRequest.HOT_PIXEL_MODE_OFF) &&
-                hotPixelModes.contains(CaptureRequest.HOT_PIXEL_MODE_FAST)
+                hotPixelModes.contains(CaptureRequest.HOT_PIXEL_MODE_FAST),
+            autoExposureLock = characteristics.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
         )
     }
 
@@ -528,6 +654,19 @@ class CameraController(
             focusDistanceDiopters = 0.0f..max(0.0f, focusMax)
         )
     }
+
+    private data class PreviewResources(
+        val camera: CameraDevice,
+        val session: CameraCaptureSession,
+        val surface: Surface,
+        val generation: Long
+    )
+
+    private data class ControlSnapshot(
+        val settings: CameraControlSettings,
+        val autoExposureState: AutoExposureState,
+        val revision: Long
+    )
 
     private companion object {
         const val MAX_PREVIEW_PIXELS = 1920L * 1080L

@@ -12,6 +12,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -23,16 +24,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import java.util.Locale
-import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlin.math.roundToLong
 
 @Composable
 fun CameraSettingsPanel(
     settings: CameraControlSettings,
     ranges: CameraControlRanges,
     support: CameraControlSupport,
+    exposureStatus: ExposureStatus,
     onSettingsChanged: (CameraControlSettings) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -54,21 +53,29 @@ fun CameraSettingsPanel(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Column {
-                    Text("Manual exposure", color = Color.White, style = MaterialTheme.typography.titleMedium)
+                    Text("Exposure", color = Color.White, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Status: ${exposureStatus.displayName}",
+                        color = Color.LightGray,
+                        style = MaterialTheme.typography.bodySmall
+                    )
                     Text(
                         support.summaryText(),
                         color = Color.LightGray,
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
-                Switch(
-                    checked = settings.manualControlsEnabled && support.canUseManualControls,
-                    enabled = support.canUseManualControls,
-                    onCheckedChange = { checked ->
-                        onSettingsChanged(settings.copy(manualControlsEnabled = checked))
-                    },
-                    colors = cameraSwitchColors()
-                )
+                Column(horizontalAlignment = Alignment.End) {
+                    Text("Auto exposure", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                    Switch(
+                        checked = !settings.manualControlsEnabled || !support.canUseManualControls,
+                        enabled = support.canUseManualControls,
+                        onCheckedChange = { autoEnabled ->
+                            onSettingsChanged(settings.copy(manualControlsEnabled = !autoEnabled))
+                        },
+                        colors = cameraSwitchColors()
+                    )
+                }
             }
 
             if (!support.canUseManualControls) {
@@ -80,6 +87,20 @@ fun CameraSettingsPanel(
             }
 
             HorizontalDivider(color = Color.White.copy(alpha = 0.22f))
+
+            SettingSwitch(
+                label = "Meter then lock",
+                checked = settings.meterThenLockEnabled && support.autoExposureLock,
+                enabled = !settings.manualControlsEnabled && support.autoExposureLock,
+                onCheckedChange = { onSettingsChanged(settings.copy(meterThenLockEnabled = it)) }
+            )
+            if (!support.autoExposureLock) {
+                Text(
+                    "Exposure lock is unavailable on this camera.",
+                    color = Color.LightGray,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
 
             val manualExposureEnabled = settings.manualControlsEnabled && support.canUseManualControls
 
@@ -136,20 +157,32 @@ private fun ExposureSlider(
     enabled: Boolean,
     onSettingsChanged: (CameraControlSettings) -> Unit
 ) {
-    val minMs = max(0.1f, ranges.exposureTimeNs.first / 1_000_000f)
-    val maxMs = max(minMs, min(30_000f, ranges.exposureTimeNs.last / 1_000_000f))
-    val valueMs = (settings.exposureTimeNs / 1_000_000f).coerceIn(minMs, maxMs)
+    val effectiveExposure = settings.exposureTimeNs.coerceIn(ranges.exposureTimeNs)
 
     LabeledSlider(
-        label = "Exposure",
-        valueText = "${formatFloat(valueMs)} ms",
-        value = valueMs,
-        valueRange = minMs..maxMs,
+        label = "Manual exposure time",
+        valueText = formatExposureTime(effectiveExposure),
+        value = ExposureSliderScale.positionFor(effectiveExposure, ranges.exposureTimeNs),
+        valueRange = 0f..1f,
         enabled = enabled,
         onValueChange = {
-            onSettingsChanged(settings.copy(exposureTimeNs = (it * 1_000_000L).roundToLong()))
+            onSettingsChanged(
+                settings.copy(exposureTimeNs = ExposureSliderScale.exposureTimeAt(it, ranges.exposureTimeNs))
+            )
         }
     )
+    val presetEffective = CameraControlSettings.DEFAULT_EXPOSURE_TIME_NS.coerceIn(ranges.exposureTimeNs)
+    TextButton(
+        onClick = {
+            onSettingsChanged(settings.copy(exposureTimeNs = presetEffective))
+        },
+        enabled = enabled
+    ) {
+        Text(
+            if (presetEffective == CameraControlSettings.DEFAULT_EXPOSURE_TIME_NS) "400 ms preset"
+            else "400 ms preset (${formatExposureTime(presetEffective)} effective)"
+        )
+    }
 }
 
 @Composable
@@ -180,7 +213,7 @@ private fun FocusSlider(
 ) {
     LabeledSlider(
         label = "Focus",
-        valueText = "${formatFloat(settings.focusDistanceDiopters)} D",
+        valueText = formatFocusDistance(settings.focusDistanceDiopters),
         value = settings.focusDistanceDiopters,
         valueRange = ranges.focusDistanceDiopters.start..ranges.focusDistanceDiopters.endInclusive,
         enabled = enabled,
@@ -188,6 +221,12 @@ private fun FocusSlider(
             onSettingsChanged(settings.copy(focusDistanceDiopters = it))
         }
     )
+    TextButton(
+        onClick = { onSettingsChanged(settings.copy(focusDistanceDiopters = 0f)) },
+        enabled = enabled
+    ) {
+        Text("∞ Infinity")
+    }
 }
 
 @Composable
@@ -269,10 +308,11 @@ private fun CameraControlSupport.summaryText(): String {
 
 private fun Boolean.status(): String = if (this) "supported" else "unsupported"
 
-private fun formatFloat(value: Float): String {
-    return if (value >= 10f) {
-        value.roundToInt().toString()
-    } else {
-        String.format(Locale.US, "%.1f", value)
+private fun formatExposureTime(exposureTimeNs: Long): String {
+    val milliseconds = exposureTimeNs / 1_000_000.0
+    return when {
+        milliseconds >= 100.0 -> String.format(Locale.US, "%.0f ms", milliseconds)
+        milliseconds >= 1.0 -> String.format(Locale.US, "%.2f ms", milliseconds)
+        else -> String.format(Locale.US, "%.0f µs", exposureTimeNs / 1_000.0)
     }
 }

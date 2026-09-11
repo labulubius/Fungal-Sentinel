@@ -48,6 +48,7 @@ class MainActivity : ComponentActivity() {
     private var cameraSupport by mutableStateOf(CameraControlSupport(false, false, false, false, false, false))
     private var controlRanges by mutableStateOf(CameraControlRanges.fallback)
     private var cameraSettings by mutableStateOf(CameraControlSettings.manualDefaults())
+    private var exposureStatus by mutableStateOf(ExposureStatus.MANUAL)
     private var captureReady by mutableStateOf(false)
     private var captureGeneration = 0L
     private var fssaState by mutableStateOf(FssaUiState())
@@ -90,11 +91,13 @@ class MainActivity : ComponentActivity() {
             context = this,
             onCaptureReadyChanged = ::updateCaptureReady,
             onRawCaptured = ::handleRawCapture,
-            onError = ::handleCameraError
+            onError = ::handleCameraError,
+            onExposureStatusChanged = ::updateExposureStatus
         )
         cameraSupport = cameraController.support
         controlRanges = cameraController.ranges
         cameraSettings = cameraController.settings
+        exposureStatus = AutoExposureState().status(cameraSettings, cameraSupport)
         cameraController.start()
 
         if (hasCameraPermission()) {
@@ -176,7 +179,10 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                         )
-                        val captureEnabled = cameraSupport.raw && captureReady &&
+                        val exposureReady = cameraSettings.manualControlsEnabled ||
+                            !cameraSettings.meterThenLockEnabled || !cameraSupport.autoExposureLock ||
+                            exposureStatus == ExposureStatus.AUTO_LOCKED
+                        val captureEnabled = cameraSupport.raw && captureReady && exposureReady &&
                             !fssaState.busy && when (fssaState.step) {
                                 AnalysisStep.POSITIONING -> true
                                 AnalysisStep.RESPONSE -> fssaState.wavelengthCalibration != null
@@ -194,6 +200,7 @@ class MainActivity : ComponentActivity() {
                             settings = cameraSettings,
                             ranges = controlRanges,
                             support = cameraSupport,
+                            exposureStatus = exposureStatus,
                             onClose = {
                                 sidebarDetailVisible = false
                                 sidebarVisible = false
@@ -471,6 +478,12 @@ class MainActivity : ComponentActivity() {
     private fun updateCaptureReady(ready: Boolean) {
         runOnUiThread {
             captureReady = ready
+        }
+    }
+
+    private fun updateExposureStatus(status: ExposureStatus) {
+        runOnUiThread {
+            exposureStatus = status
         }
     }
 }

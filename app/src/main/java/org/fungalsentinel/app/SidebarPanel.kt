@@ -47,6 +47,7 @@ fun AppSidebar(
     settings: CameraControlSettings,
     ranges: CameraControlRanges,
     support: CameraControlSupport,
+    exposureStatus: ExposureStatus,
     onClose: () -> Unit,
     onAnalyzeClicked: () -> Unit,
     onStepChanged: (AnalysisStep) -> Unit,
@@ -155,6 +156,7 @@ fun AppSidebar(
                         settings = settings,
                         ranges = ranges,
                         support = support,
+                        exposureStatus = exposureStatus,
                         onSettingsChanged = onSettingsChanged
                     )
                 }
