@@ -10,11 +10,7 @@
 - Current test build: versionName `1.2.2`, versionCode `5`.
 - Release APK: `dist/Fungal-Sentinel-v1.2.2.apk` (the `dist/` directory is ignored and the APK is not committed).
 - v1.2.2 is installed on the test phone with the existing release signing key.
-- Do not overwrite or commit the user's unrelated working files:
-  - modified `group/report.md`
-  - untracked `group/FSSA_v1.3.4.py`
-  - untracked `group/new version sheet.txt`
-  - untracked `group/软件汇报0909.html`
+- The former `group/` prototype/reference directory was removed after its Android requirements were incorporated.
 
 ## Test devices
 
@@ -66,7 +62,7 @@ Still not completed end-to-end. Verify on the vivo phone or another RAW-capable 
 
 ### P0: confirm bundled SPD provenance
 
-`app/src/main/res/raw/true_spd.csv` is the normalized data copied from tracked `group/CSV_Data_Cleaner/true_spd.csv` (line endings normalized). The exact characterized lamp/source and measurement conditions are not documented. The app warns that the bundled curve must only be used with its matching source. Obtain and record that provenance before calling quantitative response calibration validated.
+`app/src/main/res/raw/true_spd.csv` is the bundled normalized source curve retained from the former reference-data directory. The exact characterized lamp/source and measurement conditions are not documented. The app warns that the bundled curve must only be used with its matching source. Obtain and record that provenance before calling quantitative response calibration validated.
 
 ### P1: user UI micro-adjustment
 

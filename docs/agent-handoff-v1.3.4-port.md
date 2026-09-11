@@ -4,20 +4,18 @@
 >
 > 工作目录：`/home/labulubius/Projects/Fungal-Sentinel`
 >
-> 当前状态：Android v1.3.4 修改已整理；`group/` 中仍有用户工作文件，禁止重置或覆盖工作区
+> 当前状态：Android v1.3.4 已整理并发布；旧版 `group/` 参考资料目录已按用户要求移除
 
 ## 新 Agent 首先阅读
 
 1. 本文件；
 2. `docs/python-v1.3.4-port.md`；
 3. `docs/software-review-issues.md`；
-4. `group/FSSA_v1.3.4.py`；
-5. `group/Fungal Sentinel Spectral Analyzer (FSSA) Devblog.md`；
-6. Android 核心：`SpectralAlgorithms.kt`、`RawProfileExtractor.kt`、`SpectralModels.kt`、`MainActivity.kt`。
+4. Android 核心：`SpectralAlgorithms.kt`、`RawProfileExtractor.kt`、`SpectralModels.kt`、`MainActivity.kt`。
 
 ## 用户目标
 
-将 Android App 的核心光谱算法与 Python `group/FSSA_v1.3.4.py` 对齐，同时保留适合 Camera2 即时采集的交互和设备安全检查。用户确认：不与 FSSA 核心算法冲突的可靠性和质量控制可以继续实现。
+将 Android App 的核心光谱算法与 Python FSSA v1.3.4 基准实现对齐，同时保留适合 Camera2 即时采集的交互和设备安全检查。用户确认：不与 FSSA 核心算法冲突的可靠性和质量控制可以继续实现。
 
 ## 已完成的 v1.3.4 核心算法
 
@@ -138,25 +136,9 @@ optimization {
 - 低信号、ROI 稳定性等更多质量门槛；
 - 用户反馈“第三个图是什么东西”仍缺截图，不能确定对象。
 
-## 工作区保护
+## 资料目录说明
 
-`group/` 目录仍包含未纳入 Android 发布提交的用户文件和修改，尤其是：
-
-- `group/FSSA_v1.3.4.py`
-- `group/new version sheet.txt`
-- `group/Fungal Sentinel Spectral Analyzer (FSSA) Devblog.md`
-- `group/report.md`
-- `group/软件汇报0909.html`
-
-不要执行：
-
-```bash
-git reset --hard
-git clean -fd
-git checkout -- group/
-```
-
-不要覆盖或删除 `group/` 下的用户文件。每次修改前先运行 `git status --short`，只编辑任务相关文件。
+旧版 `group/` 目录包含 Python 原型、辅助工具和历史材料，已在 Android 功能兑现后按用户要求从仓库移除。Android 移植差异与验收状态保留在 `docs/` 中。
 
 ## 注意事项
 
