@@ -42,6 +42,11 @@ class CameraController(
     val characteristics: CameraCharacteristics = cameraManager.getCameraCharacteristics(cameraId)
     val support: CameraControlSupport = detectCameraSupport(characteristics)
     val ranges: CameraControlRanges = detectControlRanges(characteristics)
+    private val autoExposureFpsRange: Range<Int>? = PreviewFrameRateSelector.choose(
+        characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            ?.map { it.lower..it.upper }
+            .orEmpty()
+    )?.let { Range(it.first, it.last) }
 
     @Volatile
     var settings: CameraControlSettings = CameraControlSettings.manualDefaults()
@@ -241,7 +246,12 @@ class CameraController(
         val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
         requestBuilder.addTarget(rawSurface)
         val controlSnapshot = controlSnapshot()
-        applyCameraSettings(requestBuilder, controlSnapshot.settings, controlSnapshot.autoExposureState)
+        applyCameraSettings(
+            requestBuilder,
+            controlSnapshot.settings,
+            controlSnapshot.autoExposureState,
+            constrainAutoExposureFps = false
+        )
         session.capture(
             requestBuilder.build(),
             object : CameraCaptureSession.CaptureCallback() {
@@ -398,7 +408,12 @@ class CameraController(
         try {
             val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
             requestBuilder.addTarget(surface)
-            applyCameraSettings(requestBuilder, snapshot.settings, snapshot.autoExposureState)
+            applyCameraSettings(
+                requestBuilder,
+                snapshot.settings,
+                snapshot.autoExposureState,
+                constrainAutoExposureFps = true
+            )
             val request = requestBuilder.build()
             val callback = object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(
@@ -448,7 +463,8 @@ class CameraController(
     private fun applyCameraSettings(
         requestBuilder: CaptureRequest.Builder,
         currentSettings: CameraControlSettings,
-        currentAutoExposureState: AutoExposureState
+        currentAutoExposureState: AutoExposureState,
+        constrainAutoExposureFps: Boolean
     ) {
         val manualExposureEnabled = currentSettings.manualControlsEnabled && support.canUseManualControls
         // CONTROL_MODE stays AUTO so AF/AWB/post-processing remain independently controllable.
@@ -459,6 +475,11 @@ class CameraController(
             requestBuilder.set(CaptureRequest.SENSOR_SENSITIVITY, currentSettings.iso)
         } else {
             requestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+            if (constrainAutoExposureFps) {
+                autoExposureFpsRange?.let {
+                    requestBuilder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it)
+                }
+            }
         }
         if (support.autoExposureLock) {
             requestBuilder.set(

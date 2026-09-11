@@ -69,6 +69,19 @@ class CameraControlSettingsTest {
     }
 
     @Test
+    fun previewFrameRatePrefersStable30Fps() {
+        val selected = PreviewFrameRateSelector.choose(
+            listOf(10..10, 5..15, 15..15, 5..24, 24..24, 5..30, 7..30, 30..30)
+        )
+
+        assertEquals(30..30, selected)
+        assertEquals(15..30, PreviewFrameRateSelector.choose(listOf(5..30, 15..30)))
+        assertEquals(24..24, PreviewFrameRateSelector.choose(listOf(5..30, 24..24)))
+        assertEquals(24..24, PreviewFrameRateSelector.choose(listOf(15..15, 24..24)))
+        assertEquals(null, PreviewFrameRateSelector.choose(emptyList()))
+    }
+
+    @Test
     fun logarithmicExposureScaleRoundTripsAndKeeps400msExactPreset() {
         val range = 100_000L..2_000_000_000L
         val target = CameraControlSettings.DEFAULT_EXPOSURE_TIME_NS

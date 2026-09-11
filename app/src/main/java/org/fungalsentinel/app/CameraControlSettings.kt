@@ -111,6 +111,19 @@ data class AutoExposureState(
     }
 }
 
+/** Selects a stable preview range near 30 fps so auto exposure cannot make preview motion choppy. */
+object PreviewFrameRateSelector {
+    fun choose(ranges: List<IntRange>, targetFps: Int = 30): IntRange? {
+        val valid = ranges.filter { it.first > 0 && it.last >= it.first }
+        if (valid.isEmpty()) return null
+        val atOrBelowTarget = valid.filter { it.last <= targetFps }
+        if (atOrBelowTarget.isNotEmpty()) {
+            return atOrBelowTarget.maxWithOrNull(compareBy<IntRange> { it.first }.thenBy { it.last })
+        }
+        return valid.minByOrNull { it.last }
+    }
+}
+
 /** Logarithmic mapping gives short and long shutter times useful portions of the slider. */
 object ExposureSliderScale {
     fun positionFor(exposureTimeNs: Long, range: LongRange): Float {
