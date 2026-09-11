@@ -46,16 +46,20 @@
   - `7ed1d42 style: compact sidebar and enlarge menu button`
   - `02f07b6 style: use menu icon for sidebar close`
   - `3a9c6be style: align sidebar menu toggle`
+- 窄屏展开正文时，完整目录会压缩为 72 dp 图标/编号栏；隐藏硬件不支持的参数并精简说明文字。
+  - `59107b2 style: compact narrow-screen controls`
 
 ## 当前验证基线
 
 最近一次检查结果：
 
-- `testDebugUnitTest`：11 项测试通过，0 失败；
-- `lintDebug`：0 错误，28 个非阻塞警告；
-- `assembleDebug`：构建成功；
-- 模拟器中预览、菜单、横竖屏布局、目录滚动、RAW 捕获和分析流程可以运行；
-- 未发现 App 崩溃或 ANR。
+- 当前测试版本：v1.2.2（versionCode 5）；
+- `testDebugUnitTest`：32 项测试通过，0 失败；
+- 仪器测试：2 项通过；
+- `lintDebug`：0 错误，30 个非阻塞警告；
+- Debug 与 Release APK 均构建成功；
+- 模拟器中预览、菜单、窄屏布局、横竖屏、目录滚动、RAW 捕获和分析流程可以运行；
+- v1.2.2 已通过无线 ADB 安装到 vivo V2303A；未发现 App 崩溃或 ANR。
 
 模拟器限制：
 
@@ -86,7 +90,7 @@
 
 ### 2. 真机 Camera2/RAW/DNG 验证
 
-**状态：待具备支持 RAW 的真机后执行。**
+**状态：已有 vivo V2303A 测试机，待完整执行四步流程。** 当前已完成安装、启动和窄屏界面检查，但尚未确认 DNG 可读性、400 ms 实际元数据及完整定量流程。
 
 至少验证：
 
@@ -164,6 +168,10 @@
 - UI 将 `0 D` 显示为 `∞ / Infinity`；
 - 可增加一键切换到无穷远；
 - 不支持手动对焦时安全禁用。
+
+### 实时预览流畅度说明
+
+vivo V2303A 在移动手机时仍可感到预览不流畅。v1.2.2 已为自动曝光预览请求设备公布的稳定 `[30,30]` FPS 范围，但用户未感到明显改善。该问题不影响 RAW 数据和光谱计算，暂不继续修改 Camera2 核心流程。手动 400 ms 曝光的理论上限约为 2.5 FPS，卡顿属于物理限制；若以后继续调查，应先记录实际帧时间戳、曝光时间和 frame duration，不要继续猜测式调参。
 
 ---
 
