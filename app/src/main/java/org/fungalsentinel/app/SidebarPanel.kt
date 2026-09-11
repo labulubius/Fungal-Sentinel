@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -63,27 +64,32 @@ fun AppSidebar(
     onCalculateConcentration: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val compactDetail = detailVisible && LocalConfiguration.current.screenWidthDp < 600
+    val sidebarModifier = if (compactDetail) {
+        Modifier.width(72.dp)
+    } else {
+        Modifier.width(IntrinsicSize.Max).widthIn(min = 160.dp, max = 220.dp)
+    }
     Row(
         modifier = modifier
             .fillMaxSize()
             .safeDrawingPadding()
     ) {
         Surface(
-            modifier = Modifier
-                .width(IntrinsicSize.Max)
-                .widthIn(min = 160.dp, max = 220.dp)
-                .clickable { },
+            modifier = sidebarModifier.clickable { },
             shape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp),
             color = PanelBackground,
             contentColor = Color.White,
             tonalElevation = 0.dp
         ) {
-            Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+            Column(
+                modifier = Modifier.padding(horizontal = if (compactDetail) 4.dp else 8.dp, vertical = 4.dp)
+            ) {
                 IconButton(
                     onClick = onClose,
                     modifier = Modifier
-                        .padding(start = 4.dp, top = 8.dp)
-                        .size(64.dp)
+                        .padding(start = if (compactDetail) 0.dp else 4.dp, top = 8.dp)
+                        .size(if (compactDetail) 56.dp else 64.dp)
                 ) {
                     Text("☰", style = MaterialTheme.typography.headlineSmall)
                 }
@@ -95,7 +101,7 @@ fun AppSidebar(
                     verticalArrangement = Arrangement.spacedBy(1.dp)
                 ) {
                     DirectoryButton(
-                        text = if (analyzeExpanded) "▾ Analyze" else "▸ Analyze",
+                        text = if (compactDetail) "A" else if (analyzeExpanded) "▾ Analyze" else "▸ Analyze",
                         selected = section == SidebarSection.ANALYZE,
                         onClick = onAnalyzeClicked
                     )
@@ -103,9 +109,9 @@ fun AppSidebar(
                     if (analyzeExpanded) {
                         AnalysisStep.entries.forEach { step ->
                             DirectoryButton(
-                                text = "${step.number}. ${step.title}",
+                                text = if (compactDetail) step.number.toString() else "${step.number}. ${step.title}",
                                 selected = section == SidebarSection.ANALYZE && state.step == step,
-                                indent = 8.dp,
+                                indent = if (compactDetail) 0.dp else 8.dp,
                                 smallText = true,
                                 onClick = { onStepChanged(step) }
                             )
@@ -113,7 +119,7 @@ fun AppSidebar(
                     }
 
                     DirectoryButton(
-                        text = "Camera Parameters",
+                        text = if (compactDetail) "⚙" else "Camera Parameters",
                         selected = section == SidebarSection.PARAMETERS,
                         smallText = true,
                         onClick = onParametersClicked
@@ -121,6 +127,9 @@ fun AppSidebar(
 
                     DirectoryButton(
                         text = when {
+                            compactDetail && state.busy -> "…"
+                            compactDetail && !support.raw -> "×"
+                            compactDetail -> "●"
                             state.busy -> "Processing…"
                             !support.raw -> "RAW Unsupported"
                             else -> "Capture"
@@ -135,12 +144,18 @@ fun AppSidebar(
         }
 
         if (detailVisible) {
-            Surface(
-                modifier = Modifier
+            val detailModifier = if (compactDetail) {
+                Modifier
+                    .weight(1f)
+                    .padding(start = 4.dp, top = 8.dp, end = 4.dp)
+            } else {
+                Modifier
                     .weight(1f, fill = false)
                     .padding(start = 8.dp, top = 56.dp, end = 8.dp)
                     .widthIn(max = 560.dp)
-                    .clickable { },
+            }
+            Surface(
+                modifier = detailModifier.clickable { },
                 shape = MaterialTheme.shapes.large,
                 color = PanelBackground,
                 contentColor = Color.White,

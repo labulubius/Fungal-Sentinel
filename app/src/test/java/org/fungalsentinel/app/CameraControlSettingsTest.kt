@@ -15,7 +15,7 @@ class CameraControlSettingsTest {
         assertEquals(400_000_000L, settings.exposureTimeNs)
         assertEquals(400, settings.iso)
         assertEquals(0.0f, settings.focusDistanceDiopters)
-        assertEquals("∞ / Infinity (0 D)", formatFocusDistance(settings.focusDistanceDiopters))
+        assertEquals("∞ (0 D)", formatFocusDistance(settings.focusDistanceDiopters))
         assertFalse(settings.autoWhiteBalanceEnabled)
         assertFalse(settings.meterThenLockEnabled)
     }

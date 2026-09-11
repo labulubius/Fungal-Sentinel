@@ -52,100 +52,93 @@ fun CameraSettingsPanel(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text("Exposure", color = Color.White, style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Status: ${exposureStatus.displayName}",
-                        color = Color.LightGray,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        support.summaryText(),
+                        exposureStatus.displayName,
                         color = Color.LightGray,
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("Auto exposure", color = Color.White, style = MaterialTheme.typography.bodySmall)
-                    Switch(
-                        checked = !settings.manualControlsEnabled || !support.canUseManualControls,
-                        enabled = support.canUseManualControls,
-                        onCheckedChange = { autoEnabled ->
-                            onSettingsChanged(settings.copy(manualControlsEnabled = !autoEnabled))
-                        },
-                        colors = cameraSwitchColors()
-                    )
+                if (support.canUseManualControls) {
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("Auto", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                        Switch(
+                            checked = !settings.manualControlsEnabled,
+                            onCheckedChange = { autoEnabled ->
+                                onSettingsChanged(settings.copy(manualControlsEnabled = !autoEnabled))
+                            },
+                            colors = cameraSwitchColors()
+                        )
+                    }
                 }
-            }
-
-            if (!support.canUseManualControls) {
-                Text(
-                    "Exposure and ISO use camera auto mode. Other supported parameters and RAW capture remain available.",
-                    color = Color.LightGray,
-                    style = MaterialTheme.typography.bodySmall
-                )
             }
 
             HorizontalDivider(color = Color.White.copy(alpha = 0.22f))
 
-            SettingSwitch(
-                label = "Meter then lock",
-                checked = settings.meterThenLockEnabled && support.autoExposureLock,
-                enabled = !settings.manualControlsEnabled && support.autoExposureLock,
-                onCheckedChange = { onSettingsChanged(settings.copy(meterThenLockEnabled = it)) }
-            )
-            if (!support.autoExposureLock) {
-                Text(
-                    "Exposure lock is unavailable on this camera.",
-                    color = Color.LightGray,
-                    style = MaterialTheme.typography.bodySmall
+            if (support.autoExposureLock) {
+                SettingSwitch(
+                    label = "Meter & lock",
+                    checked = settings.meterThenLockEnabled,
+                    enabled = !settings.manualControlsEnabled,
+                    onCheckedChange = { onSettingsChanged(settings.copy(meterThenLockEnabled = it)) }
                 )
             }
 
             val manualExposureEnabled = settings.manualControlsEnabled && support.canUseManualControls
 
-            ExposureSlider(
-                settings = settings,
-                ranges = ranges,
-                enabled = manualExposureEnabled,
-                onSettingsChanged = onSettingsChanged
-            )
-            IsoSlider(
-                settings = settings,
-                ranges = ranges,
-                enabled = manualExposureEnabled,
-                onSettingsChanged = onSettingsChanged
-            )
-            FocusSlider(
-                settings = settings,
-                ranges = ranges,
-                enabled = support.manualFocus,
-                onSettingsChanged = onSettingsChanged
-            )
+            if (support.canUseManualControls) {
+                ExposureSlider(
+                    settings = settings,
+                    ranges = ranges,
+                    enabled = manualExposureEnabled,
+                    onSettingsChanged = onSettingsChanged
+                )
+                IsoSlider(
+                    settings = settings,
+                    ranges = ranges,
+                    enabled = manualExposureEnabled,
+                    onSettingsChanged = onSettingsChanged
+                )
+            }
+            if (support.manualFocus) {
+                FocusSlider(
+                    settings = settings,
+                    ranges = ranges,
+                    enabled = true,
+                    onSettingsChanged = onSettingsChanged
+                )
+            }
             SettingSwitch(
-                label = "Auto white balance",
+                label = "Auto WB",
                 checked = settings.autoWhiteBalanceEnabled,
                 enabled = true,
                 onCheckedChange = { onSettingsChanged(settings.copy(autoWhiteBalanceEnabled = it)) }
             )
-            SettingSwitch(
-                label = "Noise reduction",
-                checked = settings.noiseReductionEnabled,
-                enabled = support.noiseReduction,
-                onCheckedChange = { onSettingsChanged(settings.copy(noiseReductionEnabled = it)) }
-            )
-            SettingSwitch(
-                label = "Edge enhancement",
-                checked = settings.edgeEnhancementEnabled,
-                enabled = support.edgeEnhancement,
-                onCheckedChange = { onSettingsChanged(settings.copy(edgeEnhancementEnabled = it)) }
-            )
-            SettingSwitch(
-                label = "Hot pixel correction",
-                checked = settings.hotPixelCorrectionEnabled,
-                enabled = support.hotPixelCorrection,
-                onCheckedChange = { onSettingsChanged(settings.copy(hotPixelCorrectionEnabled = it)) }
-            )
+            if (support.noiseReduction) {
+                SettingSwitch(
+                    label = "Denoise",
+                    checked = settings.noiseReductionEnabled,
+                    enabled = true,
+                    onCheckedChange = { onSettingsChanged(settings.copy(noiseReductionEnabled = it)) }
+                )
+            }
+            if (support.edgeEnhancement) {
+                SettingSwitch(
+                    label = "Sharpen",
+                    checked = settings.edgeEnhancementEnabled,
+                    enabled = true,
+                    onCheckedChange = { onSettingsChanged(settings.copy(edgeEnhancementEnabled = it)) }
+                )
+            }
+            if (support.hotPixelCorrection) {
+                SettingSwitch(
+                    label = "Hot pixels",
+                    checked = settings.hotPixelCorrectionEnabled,
+                    enabled = true,
+                    onCheckedChange = { onSettingsChanged(settings.copy(hotPixelCorrectionEnabled = it)) }
+                )
+            }
         }
     }
 }
@@ -160,7 +153,7 @@ private fun ExposureSlider(
     val effectiveExposure = settings.exposureTimeNs.coerceIn(ranges.exposureTimeNs)
 
     LabeledSlider(
-        label = "Manual exposure time",
+        label = "Exposure time",
         valueText = formatExposureTime(effectiveExposure),
         value = ExposureSliderScale.positionFor(effectiveExposure, ranges.exposureTimeNs),
         valueRange = 0f..1f,
@@ -179,8 +172,8 @@ private fun ExposureSlider(
         enabled = enabled
     ) {
         Text(
-            if (presetEffective == CameraControlSettings.DEFAULT_EXPOSURE_TIME_NS) "400 ms preset"
-            else "400 ms preset (${formatExposureTime(presetEffective)} effective)"
+            if (presetEffective == CameraControlSettings.DEFAULT_EXPOSURE_TIME_NS) "Set 400 ms"
+            else "Set ${formatExposureTime(presetEffective)} (device max)"
         )
     }
 }
@@ -225,7 +218,7 @@ private fun FocusSlider(
         onClick = { onSettingsChanged(settings.copy(focusDistanceDiopters = 0f)) },
         enabled = enabled
     ) {
-        Text("∞ Infinity")
+        Text("Set ∞")
     }
 }
 
@@ -269,8 +262,13 @@ private fun SettingSwitch(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(label, color = if (enabled) Color.White else Color.White.copy(alpha = 0.45f))
-        Spacer(modifier = Modifier.width(16.dp))
+        Text(
+            label,
+            modifier = Modifier.weight(1f),
+            color = if (enabled) Color.White else Color.White.copy(alpha = 0.45f),
+            maxLines = 2
+        )
+        Spacer(modifier = Modifier.width(8.dp))
         Switch(
             checked = checked,
             enabled = enabled,
@@ -301,12 +299,6 @@ private fun cameraSwitchColors() = SwitchDefaults.colors(
     disabledUncheckedThumbColor = Color.White.copy(alpha = 0.35f),
     disabledUncheckedTrackColor = Color.White.copy(alpha = 0.10f)
 )
-
-private fun CameraControlSupport.summaryText(): String {
-    return "Manual: ${manualSensor.status()}  RAW: ${raw.status()}  Focus: ${manualFocus.status()}"
-}
-
-private fun Boolean.status(): String = if (this) "supported" else "unsupported"
 
 private fun formatExposureTime(exposureTimeNs: Long): String {
     val milliseconds = exposureTimeNs / 1_000_000.0

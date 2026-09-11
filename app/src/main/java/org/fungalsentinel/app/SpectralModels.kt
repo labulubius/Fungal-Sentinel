@@ -142,7 +142,7 @@ data class ConcentrationResult(
 data class FssaUiState(
     val visible: Boolean = false,
     val step: AnalysisStep = AnalysisStep.POSITIONING,
-    val status: String = "Ready to capture the RGB positioning source.",
+    val status: String = "Ready for positioning capture.",
     val busy: Boolean = false,
     val redWavelengthInput: String = PositioningWavelengths.DEFAULT.redNm.toString(),
     val greenWavelengthInput: String = PositioningWavelengths.DEFAULT.greenNm.toString(),

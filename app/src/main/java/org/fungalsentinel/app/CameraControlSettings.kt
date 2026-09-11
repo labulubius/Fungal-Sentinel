@@ -131,7 +131,7 @@ object ExposureSliderScale {
 }
 
 fun formatFocusDistance(diopters: Float): String =
-    if (diopters <= 0.0001f) "∞ / Infinity (0 D)" else "${formatCameraValue(diopters)} D"
+    if (diopters <= 0.0001f) "∞ (0 D)" else "${formatCameraValue(diopters)} D"
 
 internal fun formatCameraValue(value: Float): String = when {
     value >= 100f -> value.roundToLong().toString()

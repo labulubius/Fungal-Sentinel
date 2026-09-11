@@ -66,13 +66,13 @@ fun FssaPanel(
         ) {
             Column {
                 Text("${state.step.number}. ${state.step.title}", style = MaterialTheme.typography.titleLarge)
-                Text("FSSA on-device analysis · Offline RAW workflow", style = MaterialTheme.typography.bodySmall)
+                Text("Offline RAW analysis", style = MaterialTheme.typography.bodySmall)
             }
             HorizontalDivider(color = Color.White.copy(alpha = 0.22f))
             Text(state.status, color = if (state.busy) Color(0xffffb74d) else Color.White)
             when (state.step) {
                 AnalysisStep.POSITIONING -> {
-                    Text("Capture the combined R/G/B positioning source. B and R fit the wavelength mapping; G validates it.")
+                    Text("Capture R/G/B source. B/R fit; G checks.")
                     WavelengthField("R wavelength (nm)", state.redWavelengthInput, state.busy) {
                         onWavelengthChanged(SpectralChannel.RED, it)
                     }
@@ -97,9 +97,9 @@ fun FssaPanel(
                     }
                 }
                 AnalysisStep.RESPONSE -> {
-                    Text("Capture the matching characterized standard light source using the built-in true SPD, or import a custom SPD CSV.")
-                    Text("Current SPD source: ${state.spdSource}", style = MaterialTheme.typography.bodySmall)
-                    Text("Use the bundled curve only with the light source it was measured from.", color = Color(0xffffd54f), style = MaterialTheme.typography.bodySmall)
+                    Text("Capture the matching standard light source.")
+                    Text("SPD: ${state.spdSource}", style = MaterialTheme.typography.bodySmall)
+                    Text("Bundled SPD requires its measured light source.", color = Color(0xffffd54f), style = MaterialTheme.typography.bodySmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
                             onClick = onImportSpd,
@@ -116,7 +116,7 @@ fun FssaPanel(
                     state.spectralResponse?.let { ResponseChart(it) }
                 }
                 AnalysisStep.SAMPLE -> {
-                    Text("Select the fluorophore, then capture the unknown sample using the locked settings.")
+                    Text("Select fluorophore and capture the sample.")
                     Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Fluorophore.supported.forEach { fluor ->
                             OutlinedButton(
@@ -136,7 +136,7 @@ fun FssaPanel(
                     }
                 }
                 AnalysisStep.CONCENTRATION -> {
-                    Text("Capture 2–5 standards. Three or more are recommended for a meaningful R².")
+                    Text("Capture 2–5 standards (3+ recommended).")
                     OutlinedTextField(
                         value = state.standardConcentrationInput,
                         onValueChange = onStandardConcentrationChanged,
@@ -157,9 +157,11 @@ fun FssaPanel(
                     state.standards.forEachIndexed { index, standard ->
                         Text("Standard ${index + 1}: C=${f(standard.concentration)}, area=${f(standard.area)}")
                     }
-                    ConcentrationChart(state.standards, state.concentrationResult, state.sampleAnalysis?.area)
+                    if (state.standards.isNotEmpty()) {
+                        ConcentrationChart(state.standards, state.concentrationResult, state.sampleAnalysis?.area)
+                    }
                     ActionButton(
-                        "Build curve and calculate sample",
+                        "Build curve",
                         !state.busy && state.standards.size >= 2 && state.sampleAnalysis != null
                     ) { onCalculateConcentration() }
                     state.concentrationResult?.let {
@@ -181,10 +183,7 @@ fun FssaPanel(
                 }
             }
 
-            HorizontalDivider(color = Color.White.copy(alpha = 0.22f))
-            Text("Analysis results & logs", style = MaterialTheme.typography.titleMedium)
-            Text(state.logs.takeLast(12).joinToString("\n"), style = MaterialTheme.typography.bodySmall)
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(4.dp))
         }
     }
 }
@@ -307,7 +306,7 @@ private fun SpectrumChart(analysis: SampleAnalysis) {
         xRange = geometry.xRange,
         yRange = geometry.yRange,
         xLabel = "Wavelength (nm)",
-        yLabel = "Corrected intensity (a.u.)",
+        yLabel = "Intensity (a.u.)",
         targetX = geometry.targetPeakNm,
         interval = geometry.integrationRangeNm,
         emptyMessage = "No finite sample data in valid wavelength range"
@@ -334,8 +333,8 @@ private fun ConcentrationChart(
         series = series,
         xRange = geometry.xRange,
         yRange = geometry.yRange,
-        xLabel = "Concentration (a.u.)",
-        yLabel = "Integrated fluorescence area",
+        xLabel = "Concentration",
+        yLabel = "Integrated area",
         emptyMessage = "Capture standards to build the concentration chart"
     )
     result?.let {
