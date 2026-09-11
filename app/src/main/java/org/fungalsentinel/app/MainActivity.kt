@@ -257,7 +257,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun updateCameraSettings(next: CameraControlSettings) {
+        val previous = cameraSettings
         cameraSettings = cameraController.updateSettings(next)
+        val hasCameraDependentResults = fssaState.wavelengthCalibration != null ||
+            fssaState.spectralResponse != null || fssaState.sampleAnalysis != null ||
+            fssaState.standards.isNotEmpty() || fssaState.concentrationResult != null
+        if (cameraSettings != previous && hasCameraDependentResults) {
+            fssaState = clearWavelengthDependentResults(
+                fssaState,
+                "Camera settings changed; calibration and downstream results were cleared."
+            )
+        }
     }
 
     private fun updateWavelength(channel: SpectralChannel, value: String) {
@@ -443,6 +453,14 @@ class MainActivity : ComponentActivity() {
     ) {
         val current = fssaState
         try {
+            if (purpose != AnalysisCapturePurpose.POSITIONING) {
+                val reference = requireNotNull(current.lockedMetadata) {
+                    "Camera reference metadata is missing; repeat wavelength calibration."
+                }
+                require(RawProfileExtractor.metadataMatches(reference, profile.metadata)) {
+                    "Camera exposure, ISO, focus, sensor, or RAW size changed; repeat calibration with locked settings."
+                }
+            }
             val next = when (purpose) {
                 AnalysisCapturePurpose.POSITIONING -> {
                     val wavelengths = requireNotNull(current.positioningWavelengths) {
