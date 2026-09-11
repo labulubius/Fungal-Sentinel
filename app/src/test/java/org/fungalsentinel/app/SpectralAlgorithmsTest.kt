@@ -46,6 +46,7 @@ class SpectralAlgorithmsTest {
         val analysis = SpectralAlgorithms.analyzeSample(sample, calibration, response, Fluorophore.supported.first())
         assertTrue(analysis.area > 0.0)
         assertTrue(analysis.peak > 0.0)
+        assertEquals(response.validRangeNm, analysis.validRangeNm)
         assertTrue((1 until analysis.wavelengthsNm.size).all { analysis.wavelengthsNm[it] > analysis.wavelengthsNm[it - 1] })
     }
 

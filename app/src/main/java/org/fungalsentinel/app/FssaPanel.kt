@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,13 +25,19 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import java.util.Locale
-import kotlin.math.max
 
 @Composable
 fun FssaPanel(
@@ -120,6 +127,7 @@ fun FssaPanel(
                     state.standards.forEachIndexed { index, standard ->
                         Text("Standard ${index + 1}: C=${f(standard.concentration)}, area=${f(standard.area)}")
                     }
+                    ConcentrationChart(state.standards, state.concentrationResult, state.sampleAnalysis?.area)
                     ActionButton(
                         "Build curve and calculate sample",
                         !state.busy && state.standards.size >= 2 && state.sampleAnalysis != null
@@ -128,7 +136,17 @@ fun FssaPanel(
                         Metric("Curve", "I = ${f(it.slope)}C + ${f(it.intercept)}")
                         Metric("R²", f(it.rSquared))
                         Metric("Predicted concentration", f(it.sampleConcentration))
-                        if (it.outsideCalibrationRange) Text("Warning: result is outside the calibrated range.", color = Color(0xffff8a80))
+                        if (it.outsideCalibrationRange) {
+                            Text(
+                                "⚠ OUT OF RANGE: predicted concentration is outside the calibrated standards.",
+                                color = Color.White,
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xffb71c1c))
+                                    .padding(12.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -171,40 +189,214 @@ private fun Metric(label: String, value: String) {
     }
 }
 
+private data class ChartSeries(
+    val points: List<ChartPoint>,
+    val color: Color,
+    val showPoints: Boolean = false,
+    val dashed: Boolean = false,
+    val connectLine: Boolean = true
+)
+
 @Composable
 private fun ProfileChart(profile: SpectralProfile?) {
     profile ?: return
-    LineChart(listOf(profile.red to Color.Red, profile.green to Color.Green, profile.blue to Color.Blue))
+    val x = DoubleArray(profile.size) { it.toDouble() }
+    val all = listOf(
+        ChartGeometry.pairedFinitePoints(x, profile.red) to Color.Red,
+        ChartGeometry.pairedFinitePoints(x, profile.green) to Color.Green,
+        ChartGeometry.pairedFinitePoints(x, profile.blue) to Color.Blue
+    )
+    val points = all.flatMap { it.first }
+    XyChart(
+        series = all.map { ChartSeries(it.first, it.second) },
+        xRange = ChartGeometry.paddedRange(points.map { it.x }),
+        yRange = ChartGeometry.paddedRange(points.map { it.y } + 0.0),
+        xLabel = "Sensor position (px)",
+        yLabel = "Signal (a.u.)",
+        emptyMessage = "No finite profile data"
+    )
 }
 
 @Composable
 private fun ResponseChart(response: SpectralResponse) {
-    LineChart(listOf(response.red to Color.Red, response.green to Color.Green, response.blue to Color.Blue))
+    val channels = listOf(response.red to Color.Red, response.green to Color.Green, response.blue to Color.Blue)
+    val chartSeries = channels.flatMap { (values, color) ->
+        ChartGeometry.pairedFiniteSegments(response.wavelengthsNm, values, response.validRangeNm)
+            .map { ChartSeries(it, color) }
+    }
+    val allPoints = chartSeries.flatMap { it.points }
+    val xRange = validChartRange(response.validRangeNm)
+    XyChart(
+        series = chartSeries,
+        xRange = xRange,
+        yRange = ChartGeometry.paddedRange(allPoints.map { it.y } + 0.0),
+        xLabel = "Wavelength (nm)",
+        yLabel = "Relative response",
+        emptyMessage = "No response data in valid wavelength range"
+    )
 }
 
 @Composable
 private fun SpectrumChart(analysis: SampleAnalysis) {
-    LineChart(listOf(analysis.correctedIntensity to Color(0xff66d9ef)))
+    val geometry = ChartGeometry.spectrum(
+        analysis.wavelengthsNm,
+        analysis.correctedIntensity,
+        analysis.validRangeNm,
+        analysis.fluorophore.peakWavelengthNm,
+        analysis.fluorophore.integrationWidthNm
+    )
+    XyChart(
+        series = geometry.segments.map { ChartSeries(it, Color(0xff66d9ef)) },
+        xRange = geometry.xRange,
+        yRange = geometry.yRange,
+        xLabel = "Wavelength (nm)",
+        yLabel = "Corrected intensity (a.u.)",
+        targetX = geometry.targetPeakNm,
+        interval = geometry.integrationRangeNm,
+        emptyMessage = "No finite sample data in valid wavelength range"
+    )
+    Text(
+        "Shaded: integration interval · dashed: target peak ${f(analysis.fluorophore.peakWavelengthNm)} nm",
+        style = MaterialTheme.typography.bodySmall
+    )
 }
 
 @Composable
-private fun LineChart(series: List<Pair<DoubleArray, Color>>) {
-    val globalMax = max(1e-12, series.maxOfOrNull { it.first.maxOrNull() ?: 0.0 } ?: 1.0)
-    Canvas(modifier = Modifier.fillMaxWidth().height(180.dp).background(Color.White.copy(alpha = 0.08f))) {
-        val axisColor = Color.White.copy(alpha = 0.60f)
-        drawLine(axisColor, Offset(30f, 8f), Offset(30f, size.height - 22f))
-        drawLine(axisColor, Offset(30f, size.height - 22f), Offset(size.width - 8f, size.height - 22f))
-        series.forEach { (values, color) ->
-            if (values.size < 2) return@forEach
-            val path = Path()
-            values.indices.forEach { index ->
-                val x = 30f + index.toFloat() / (values.size - 1) * (size.width - 38f)
-                val y = (size.height - 22f) - (values[index] / globalMax).toFloat() * (size.height - 32f)
-                if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
-            }
-            drawPath(path, color)
-        }
+private fun ConcentrationChart(
+    standards: List<StandardMeasurement>,
+    result: ConcentrationResult?,
+    sampleArea: Double?
+) {
+    val geometry = ChartGeometry.concentration(standards, result, sampleArea)
+    val series = buildList {
+        add(ChartSeries(geometry.standards, Color(0xff66d9ef), showPoints = true, connectLine = false))
+        if (geometry.regressionLine.size == 2) add(ChartSeries(geometry.regressionLine, Color(0xffff8a80), dashed = true))
+        geometry.unknown?.let { add(ChartSeries(listOf(it), Color(0xffffd54f), showPoints = true, connectLine = false)) }
     }
+    XyChart(
+        series = series,
+        xRange = geometry.xRange,
+        yRange = geometry.yRange,
+        xLabel = "Concentration (a.u.)",
+        yLabel = "Integrated fluorescence area",
+        emptyMessage = "Capture standards to build the concentration chart"
+    )
+    result?.let {
+        Text(
+            "Fit: I = ${f(it.slope)}C + ${f(it.intercept)}    R² = ${f(it.rSquared)}    ● unknown",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (it.outsideCalibrationRange) Color(0xffff8a80) else Color.White
+        )
+    }
+}
+
+@Composable
+private fun XyChart(
+    series: List<ChartSeries>,
+    xRange: ChartRange,
+    yRange: ChartRange,
+    xLabel: String,
+    yLabel: String,
+    emptyMessage: String,
+    targetX: Double? = null,
+    interval: ClosedFloatingPointRange<Double>? = null
+) {
+    val hasData = series.any { it.points.isNotEmpty() }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(230.dp)
+            .background(Color.White.copy(alpha = 0.08f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(230.dp)
+                .semantics { contentDescription = "$yLabel by $xLabel chart" }
+        ) {
+            val left = 66.dp.toPx()
+            val right = size.width - 12.dp.toPx()
+            val top = 12.dp.toPx()
+            val bottom = size.height - 48.dp.toPx()
+            if (right <= left || bottom <= top) return@Canvas
+            fun px(x: Double) = (left + xRange.fraction(x).toFloat() * (right - left))
+            fun py(y: Double) = (bottom - yRange.fraction(y).toFloat() * (bottom - top))
+            val axisColor = Color.White.copy(alpha = 0.65f)
+            val gridColor = Color.White.copy(alpha = 0.13f)
+            val labelPaint = android.graphics.Paint().apply {
+                color = Color.White.copy(alpha = 0.82f).toArgb()
+                textSize = 10.dp.toPx()
+                isAntiAlias = true
+            }
+
+            interval?.let {
+                val low = it.start.coerceIn(xRange.min, xRange.max)
+                val high = it.endInclusive.coerceIn(xRange.min, xRange.max)
+                if (high >= low) drawRect(Color(0xff66d9ef).copy(alpha = 0.14f), Offset(px(low), top), androidx.compose.ui.geometry.Size(px(high) - px(low), bottom - top))
+            }
+            for (index in 0..4) {
+                val fraction = index / 4.0
+                val xValue = xRange.min + fraction * (xRange.max - xRange.min)
+                val yValue = yRange.min + fraction * (yRange.max - yRange.min)
+                val x = left + fraction.toFloat() * (right - left)
+                val y = bottom - fraction.toFloat() * (bottom - top)
+                drawLine(gridColor, Offset(x, top), Offset(x, bottom))
+                drawLine(gridColor, Offset(left, y), Offset(right, y))
+                drawContext.canvas.nativeCanvas.apply {
+                    labelPaint.textAlign = android.graphics.Paint.Align.CENTER
+                    drawText(tick(xValue), x, bottom + 15.dp.toPx(), labelPaint)
+                    labelPaint.textAlign = android.graphics.Paint.Align.RIGHT
+                    drawText(tick(yValue), left - 5.dp.toPx(), y + 3.dp.toPx(), labelPaint)
+                }
+            }
+            drawLine(axisColor, Offset(left, top), Offset(left, bottom), 1.5f)
+            drawLine(axisColor, Offset(left, bottom), Offset(right, bottom), 1.5f)
+            targetX?.takeIf { it.isFinite() && it in xRange.min..xRange.max }?.let {
+                drawLine(Color(0xffffd54f), Offset(px(it), top), Offset(px(it), bottom), 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f)))
+            }
+            series.forEach { item ->
+                if (item.connectLine && item.points.size >= 2) {
+                    val path = Path()
+                    item.points.forEachIndexed { index, point ->
+                        if (index == 0) path.moveTo(px(point.x), py(point.y)) else path.lineTo(px(point.x), py(point.y))
+                    }
+                    drawPath(
+                        path,
+                        item.color,
+                        style = Stroke(
+                            width = 2.5f,
+                            pathEffect = if (item.dashed) PathEffect.dashPathEffect(floatArrayOf(10f, 7f)) else null
+                        )
+                    )
+                }
+                if (item.showPoints) item.points.forEach { drawCircle(item.color, 5.dp.toPx(), Offset(px(it.x), py(it.y))) }
+            }
+            drawContext.canvas.nativeCanvas.apply {
+                labelPaint.textAlign = android.graphics.Paint.Align.CENTER
+                labelPaint.textSize = 11.dp.toPx()
+                drawText(xLabel, (left + right) / 2f, size.height - 5.dp.toPx(), labelPaint)
+                save()
+                rotate(-90f, 12.dp.toPx(), (top + bottom) / 2f)
+                drawText(yLabel, 12.dp.toPx(), (top + bottom) / 2f, labelPaint)
+                restore()
+            }
+        }
+        if (!hasData) Text(emptyMessage, color = Color.White.copy(alpha = 0.75f), style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+private fun validChartRange(range: ClosedFloatingPointRange<Double>): ChartRange =
+    if (range.start.isFinite() && range.endInclusive.isFinite() && range.endInclusive > range.start) {
+        ChartRange(range.start, range.endInclusive)
+    } else ChartRange(0.0, 1.0)
+
+private fun tick(value: Double): String = when {
+    !value.isFinite() -> "—"
+    kotlin.math.abs(value) >= 10_000.0 || (value != 0.0 && kotlin.math.abs(value) < 0.01) -> String.format(Locale.US, "%.1e", value)
+    kotlin.math.abs(value) >= 100.0 -> String.format(Locale.US, "%.0f", value)
+    kotlin.math.abs(value) >= 10.0 -> String.format(Locale.US, "%.1f", value)
+    else -> String.format(Locale.US, "%.2f", value)
 }
 
 private fun f(value: Double): String = String.format(Locale.US, "%.4g", value)

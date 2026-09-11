@@ -98,7 +98,9 @@ data class SampleAnalysis(
     val correctedIntensity: DoubleArray,
     val area: Double,
     val peak: Double,
-    val fluorophore: Fluorophore
+    val fluorophore: Fluorophore,
+    /** Range where response correction is calibrated and chart values are meaningful. */
+    val validRangeNm: ClosedFloatingPointRange<Double> = 420.0..680.0
 )
 
 data class StandardMeasurement(val concentration: Double, val area: Double)

@@ -106,7 +106,7 @@ object SpectralAlgorithms {
             }
         }
         require(area.isFinite() && area >= 0.0) { "The integrated signal is invalid." }
-        return SampleAnalysis(wavelengths, intensity, area, peak, fluorophore)
+        return SampleAnalysis(wavelengths, intensity, area, peak, fluorophore, response.validRangeNm)
     }
 
     fun calculateConcentration(
