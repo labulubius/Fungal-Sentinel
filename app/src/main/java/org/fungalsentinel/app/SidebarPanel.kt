@@ -54,7 +54,10 @@ fun AppSidebar(
     onParametersClicked: () -> Unit,
     onCapture: () -> Unit,
     onSettingsChanged: (CameraControlSettings) -> Unit,
+    onWavelengthChanged: (SpectralChannel, String) -> Unit,
+    onRestoreDefaultWavelengths: () -> Unit,
     onImportSpd: () -> Unit,
+    onRestoreBuiltInSpd: () -> Unit,
     onFluorophoreChanged: (Fluorophore) -> Unit,
     onStandardConcentrationChanged: (String) -> Unit,
     onCalculateConcentration: () -> Unit,
@@ -147,7 +150,10 @@ fun AppSidebar(
                 when (section) {
                     SidebarSection.ANALYZE -> FssaPanel(
                         state = state,
+                        onWavelengthChanged = onWavelengthChanged,
+                        onRestoreDefaultWavelengths = onRestoreDefaultWavelengths,
                         onImportSpd = onImportSpd,
+                        onRestoreBuiltInSpd = onRestoreBuiltInSpd,
                         onFluorophoreChanged = onFluorophoreChanged,
                         onStandardConcentrationChanged = onStandardConcentrationChanged,
                         onCalculateConcentration = onCalculateConcentration

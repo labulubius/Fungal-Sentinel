@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -36,13 +37,17 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import java.util.Locale
 
 @Composable
 fun FssaPanel(
     state: FssaUiState,
+    onWavelengthChanged: (SpectralChannel, String) -> Unit,
+    onRestoreDefaultWavelengths: () -> Unit,
     onImportSpd: () -> Unit,
+    onRestoreBuiltInSpd: () -> Unit,
     onFluorophoreChanged: (Fluorophore) -> Unit,
     onStandardConcentrationChanged: (String) -> Unit,
     onCalculateConcentration: () -> Unit,
@@ -68,6 +73,23 @@ fun FssaPanel(
             when (state.step) {
                 AnalysisStep.POSITIONING -> {
                     Text("Capture the combined R/G/B positioning source. B and R fit the wavelength mapping; G validates it.")
+                    WavelengthField("R wavelength (nm)", state.redWavelengthInput, state.busy) {
+                        onWavelengthChanged(SpectralChannel.RED, it)
+                    }
+                    WavelengthField("G wavelength (nm)", state.greenWavelengthInput, state.busy) {
+                        onWavelengthChanged(SpectralChannel.GREEN, it)
+                    }
+                    WavelengthField("B wavelength (nm)", state.blueWavelengthInput, state.busy) {
+                        onWavelengthChanged(SpectralChannel.BLUE, it)
+                    }
+                    state.wavelengthValidationMessage?.let {
+                        Text(it, color = Color(0xffff8a80), style = MaterialTheme.typography.bodySmall)
+                    }
+                    OutlinedButton(
+                        onClick = onRestoreDefaultWavelengths,
+                        enabled = !state.busy && !state.usesDefaultPositioningWavelengths,
+                        colors = analysisOutlinedButtonColors()
+                    ) { Text("Restore default wavelengths") }
                     state.wavelengthCalibration?.let {
                         Metric("Mapping", "p = ${f(it.slopePixelsPerNm)}λ + ${f(it.interceptPixels)}")
                         Metric("G validation error", "${f(it.validationErrorNm)} nm")
@@ -75,13 +97,21 @@ fun FssaPanel(
                     }
                 }
                 AnalysisStep.RESPONSE -> {
-                    Text("Optionally import a true-SPD CSV, then capture the standard light source. Without a CSV, FSSA uses its simulated default SPD.")
-                    OutlinedButton(
-                        onClick = onImportSpd,
-                        enabled = !state.busy,
-                        colors = analysisOutlinedButtonColors()
-                    ) {
-                        Text(state.spdFileName ?: "Import true SPD CSV (optional)")
+                    Text("Capture the matching characterized standard light source using the built-in true SPD, or import a custom SPD CSV.")
+                    Text("Current SPD source: ${state.spdSource}", style = MaterialTheme.typography.bodySmall)
+                    Text("Use the bundled curve only with the light source it was measured from.", color = Color(0xffffd54f), style = MaterialTheme.typography.bodySmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = onImportSpd,
+                            enabled = !state.busy,
+                            colors = analysisOutlinedButtonColors()
+                        ) { Text("Import custom CSV") }
+                        OutlinedButton(
+                            onClick = onRestoreBuiltInSpd,
+                            enabled = !state.busy &&
+                                (state.spdData == null || state.spdSource != FssaUiState.BUILT_IN_SPD_SOURCE),
+                            colors = analysisOutlinedButtonColors()
+                        ) { Text("Restore built-in") }
                     }
                     state.spectralResponse?.let { ResponseChart(it) }
                 }
@@ -157,6 +187,33 @@ fun FssaPanel(
             Spacer(Modifier.height(8.dp))
         }
     }
+}
+
+@Composable
+private fun WavelengthField(
+    label: String,
+    value: String,
+    busy: Boolean,
+    onValueChange: (String) -> Unit
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        singleLine = true,
+        enabled = !busy,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = Modifier.fillMaxWidth(),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = Color.White,
+            unfocusedTextColor = Color.White,
+            cursorColor = Color.White,
+            focusedBorderColor = Color.White,
+            unfocusedBorderColor = Color.White.copy(alpha = 0.45f),
+            focusedLabelColor = Color.White,
+            unfocusedLabelColor = Color.White.copy(alpha = 0.70f)
+        )
+    )
 }
 
 @Composable

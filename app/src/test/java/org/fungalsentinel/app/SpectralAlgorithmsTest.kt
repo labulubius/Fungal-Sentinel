@@ -18,11 +18,60 @@ class SpectralAlgorithmsTest {
             return DoubleArray(3000) { pixel -> 3.0 + 500.0 * exp(-0.5 * (pixel - center) * (pixel - center) / 36.0) }
         }
         val profile = SpectralProfile(peak(622.5), peak(522.5), peak(462.5), 50..150, 0.0, metadata)
-        val result = SpectralAlgorithms.calibrateWavelength(profile)
+        val result = SpectralAlgorithms.calibrateWavelength(profile, PositioningWavelengths.DEFAULT)
         assertEquals(expectedSlope, result.slopePixelsPerNm, 0.02)
         assertEquals(expectedIntercept, result.interceptPixels, 3.0)
         assertEquals(0.0, result.validationErrorNm, 0.1)
         assertEquals("PASS", result.qualityMessage)
+    }
+
+    @Test
+    fun wavelengthCalibrationUsesExplicitCustomWavelengths() {
+        val wavelengths = PositioningWavelengths(redNm = 650.0, greenNm = 540.0, blueNm = 450.0)
+        val expectedSlope = -3.0
+        val expectedIntercept = 3600.0
+        fun peak(wavelength: Double): DoubleArray {
+            val center = expectedSlope * wavelength + expectedIntercept
+            return DoubleArray(3000) { pixel ->
+                2.0 + 400.0 * exp(-0.5 * (pixel - center) * (pixel - center) / 36.0)
+            }
+        }
+        val profile = SpectralProfile(
+            peak(wavelengths.redNm),
+            peak(wavelengths.greenNm),
+            peak(wavelengths.blueNm),
+            50..150,
+            0.0,
+            metadata
+        )
+
+        val result = SpectralAlgorithms.calibrateWavelength(profile, wavelengths)
+
+        assertEquals(expectedSlope, result.slopePixelsPerNm, 0.02)
+        assertEquals(wavelengths.redNm, result.peaks.first { it.name == "R" }.wavelengthNm, 0.0)
+        assertEquals(wavelengths.greenNm, result.peaks.first { it.name == "G" }.wavelengthNm, 0.0)
+        assertEquals(wavelengths.blueNm, result.peaks.first { it.name == "B" }.wavelengthNm, 0.0)
+    }
+
+    @Test
+    fun positioningWavelengthValidationRequiresFinitePositiveOrderedValues() {
+        assertTrue(PositioningWavelengths.parse("622.5", "522.5", "462.5").isSuccess)
+        assertTrue(PositioningWavelengths.parse("Infinity", "522.5", "462.5").isFailure)
+        assertTrue(PositioningWavelengths.parse("622.5", "400", "462.5").isFailure)
+        assertTrue(PositioningWavelengths.parse("622.5", "522.5", "0").isFailure)
+        assertTrue(PositioningWavelengths.parse("", "522.5", "462.5").isFailure)
+    }
+
+    @Test
+    fun wavelengthInputsDefaultToRequestedValuesAndExposeCaptureValidity() {
+        val state = FssaUiState()
+        assertEquals("622.5", state.redWavelengthInput)
+        assertEquals("522.5", state.greenWavelengthInput)
+        assertEquals("462.5", state.blueWavelengthInput)
+        assertEquals(PositioningWavelengths.DEFAULT, state.positioningWavelengths)
+        assertTrue(state.usesDefaultPositioningWavelengths)
+        assertFalse(state.copy(redWavelengthInput = "620").usesDefaultPositioningWavelengths)
+        assertEquals(null, state.copy(blueWavelengthInput = "700").positioningWavelengths)
     }
 
     @Test
@@ -79,5 +128,10 @@ class SpectralAlgorithmsTest {
         val parsed = SpectralAlgorithms.parseSpdCsv("Wavelength_nm,Intensity\n550,1\n420,0.5\n550,2\n680,0.4")
         assertTrue(parsed.wavelengthsNm.contentEquals(doubleArrayOf(420.0, 550.0, 680.0)))
         assertTrue(parsed.intensity.contentEquals(doubleArrayOf(0.5, 1.0, 0.4)))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun csvParserRejectsNegativeIntensity() {
+        SpectralAlgorithms.parseSpdCsv("420,0.5\n550,-0.1\n680,0.4")
     }
 }

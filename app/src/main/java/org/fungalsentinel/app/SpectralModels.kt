@@ -90,6 +90,32 @@ data class Fluorophore(
 
 enum class SpectralChannel { RED, GREEN, BLUE }
 
+data class PositioningWavelengths(
+    val redNm: Double,
+    val greenNm: Double,
+    val blueNm: Double
+) {
+    init {
+        require(redNm.isFinite() && greenNm.isFinite() && blueNm.isFinite()) {
+            "R/G/B wavelengths must be finite numbers."
+        }
+        require(blueNm > 0.0 && blueNm < greenNm && greenNm < redNm) {
+            "Wavelengths must be positive and ordered B < G < R."
+        }
+    }
+
+    companion object {
+        val DEFAULT = PositioningWavelengths(redNm = 622.5, greenNm = 522.5, blueNm = 462.5)
+
+        fun parse(red: String, green: String, blue: String): Result<PositioningWavelengths> = runCatching {
+            val values = listOf(red, green, blue).map {
+                it.trim().toDoubleOrNull() ?: error("R/G/B wavelengths must be numbers.")
+            }
+            PositioningWavelengths(values[0], values[1], values[2])
+        }
+    }
+}
+
 enum class AnalysisCapturePurpose { POSITIONING, RESPONSE, SAMPLE, STANDARD }
 
 data class SampleAnalysis(
@@ -118,6 +144,9 @@ data class FssaUiState(
     val step: AnalysisStep = AnalysisStep.POSITIONING,
     val status: String = "Ready to capture the RGB positioning source.",
     val busy: Boolean = false,
+    val redWavelengthInput: String = PositioningWavelengths.DEFAULT.redNm.toString(),
+    val greenWavelengthInput: String = PositioningWavelengths.DEFAULT.greenNm.toString(),
+    val blueWavelengthInput: String = PositioningWavelengths.DEFAULT.blueNm.toString(),
     val wavelengthCalibration: WavelengthCalibration? = null,
     val spectralResponse: SpectralResponse? = null,
     val sampleAnalysis: SampleAnalysis? = null,
@@ -127,8 +156,30 @@ data class FssaUiState(
     val lockedMetadata: CaptureMetadata? = null,
     val lastProfile: SpectralProfile? = null,
     val spdData: SpectralAlgorithms.SpdData? = null,
-    val spdFileName: String? = null,
+    val spdSource: String = SPD_NOT_LOADED_SOURCE,
     val standardConcentrationInput: String = "",
     val pendingCapture: AnalysisCapturePurpose? = null,
     val logs: List<String> = listOf("FSSA v1.1 ready. All analysis is performed offline.")
-)
+) {
+    val positioningWavelengths: PositioningWavelengths?
+        get() = PositioningWavelengths.parse(
+            redWavelengthInput,
+            greenWavelengthInput,
+            blueWavelengthInput
+        ).getOrNull()
+
+    val wavelengthValidationMessage: String?
+        get() = PositioningWavelengths.parse(
+            redWavelengthInput,
+            greenWavelengthInput,
+            blueWavelengthInput
+        ).exceptionOrNull()?.message
+
+    val usesDefaultPositioningWavelengths: Boolean
+        get() = positioningWavelengths == PositioningWavelengths.DEFAULT
+
+    companion object {
+        const val BUILT_IN_SPD_SOURCE = "Built-in true_spd.csv"
+        const val SPD_NOT_LOADED_SOURCE = "No SPD loaded"
+    }
+}

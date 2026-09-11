@@ -60,16 +60,7 @@ class MainActivity : ComponentActivity() {
                 ?: error("Could not read the selected file.")
             val data = SpectralAlgorithms.parseSpdCsv(text)
             val name = uri.lastPathSegment?.substringAfterLast('/') ?: "true_spd.csv"
-            fssaState = fssaState.copy(
-                spdData = data,
-                spdFileName = name,
-                spectralResponse = null,
-                sampleAnalysis = null,
-                standards = emptyList(),
-                concentrationResult = null,
-                status = "Loaded ${data.wavelengthsNm.size} true-SPD points; downstream results were cleared.",
-                logs = fssaState.logs + "SPD: loaded $name (${data.wavelengthsNm.size} points)."
-            )
+            setSpdSource(data, "Custom: $name")
         } catch (error: Exception) {
             updateFssaError("SPD import failed: ${error.message}")
         }
@@ -98,6 +89,7 @@ class MainActivity : ComponentActivity() {
         controlRanges = cameraController.ranges
         cameraSettings = cameraController.settings
         exposureStatus = AutoExposureState().status(cameraSettings, cameraSupport)
+        restoreBuiltInSpd(initialLoad = true)
         cameraController.start()
 
         if (hasCameraPermission()) {
@@ -184,8 +176,9 @@ class MainActivity : ComponentActivity() {
                             exposureStatus == ExposureStatus.AUTO_LOCKED
                         val captureEnabled = cameraSupport.raw && captureReady && exposureReady &&
                             !fssaState.busy && when (fssaState.step) {
-                                AnalysisStep.POSITIONING -> true
-                                AnalysisStep.RESPONSE -> fssaState.wavelengthCalibration != null
+                                AnalysisStep.POSITIONING -> fssaState.positioningWavelengths != null
+                                AnalysisStep.RESPONSE -> fssaState.wavelengthCalibration != null &&
+                                    fssaState.spdData != null
                                 AnalysisStep.SAMPLE -> fssaState.spectralResponse != null
                                 AnalysisStep.CONCENTRATION -> fssaState.spectralResponse != null &&
                                     fssaState.standardConcentrationInput.toDoubleOrNull() != null &&
@@ -236,7 +229,10 @@ class MainActivity : ComponentActivity() {
                                 startAnalysisCapture(purpose)
                             },
                             onSettingsChanged = ::updateCameraSettings,
+                            onWavelengthChanged = ::updateWavelength,
+                            onRestoreDefaultWavelengths = ::restoreDefaultWavelengths,
                             onImportSpd = { spdPicker.launch(arrayOf("text/csv", "text/comma-separated-values", "text/plain")) },
+                            onRestoreBuiltInSpd = { restoreBuiltInSpd(initialLoad = false) },
                             onFluorophoreChanged = {
                                 if (it != fssaState.selectedFluorophore) {
                                     fssaState = fssaState.copy(
@@ -264,9 +260,91 @@ class MainActivity : ComponentActivity() {
         cameraSettings = cameraController.updateSettings(next)
     }
 
+    private fun updateWavelength(channel: SpectralChannel, value: String) {
+        val currentValue = when (channel) {
+            SpectralChannel.RED -> fssaState.redWavelengthInput
+            SpectralChannel.GREEN -> fssaState.greenWavelengthInput
+            SpectralChannel.BLUE -> fssaState.blueWavelengthInput
+        }
+        if (value == currentValue) return
+        fssaState = clearWavelengthDependentResults(
+            when (channel) {
+                SpectralChannel.RED -> fssaState.copy(redWavelengthInput = value)
+                SpectralChannel.GREEN -> fssaState.copy(greenWavelengthInput = value)
+                SpectralChannel.BLUE -> fssaState.copy(blueWavelengthInput = value)
+            },
+            "Positioning wavelengths changed; wavelength-dependent results were cleared."
+        )
+    }
+
+    private fun restoreDefaultWavelengths() {
+        if (fssaState.usesDefaultPositioningWavelengths) return
+        val defaults = PositioningWavelengths.DEFAULT
+        fssaState = clearWavelengthDependentResults(
+            fssaState.copy(
+                redWavelengthInput = defaults.redNm.toString(),
+                greenWavelengthInput = defaults.greenNm.toString(),
+                blueWavelengthInput = defaults.blueNm.toString()
+            ),
+            "Default positioning wavelengths restored; wavelength-dependent results were cleared."
+        )
+    }
+
+    private fun clearWavelengthDependentResults(state: FssaUiState, message: String): FssaUiState = state.copy(
+        wavelengthCalibration = null,
+        spectralResponse = null,
+        sampleAnalysis = null,
+        standards = emptyList(),
+        concentrationResult = null,
+        lockedMetadata = null,
+        lastProfile = null,
+        status = message,
+        logs = state.logs + message
+    )
+
+    private fun restoreBuiltInSpd(initialLoad: Boolean) {
+        try {
+            val data = resources.openRawResource(R.raw.true_spd).bufferedReader().use {
+                SpectralAlgorithms.parseSpdCsv(it.readText())
+            }
+            if (initialLoad) {
+                fssaState = fssaState.copy(
+                    spdData = data,
+                    spdSource = FssaUiState.BUILT_IN_SPD_SOURCE,
+                    logs = fssaState.logs + "SPD: loaded built-in true_spd.csv (${data.wavelengthsNm.size} points)."
+                )
+            } else {
+                setSpdSource(data, FssaUiState.BUILT_IN_SPD_SOURCE)
+            }
+        } catch (error: Exception) {
+            updateFssaError("Built-in SPD load failed: ${error.message}")
+        }
+    }
+
+    private fun setSpdSource(data: SpectralAlgorithms.SpdData, source: String) {
+        fssaState = fssaState.copy(
+            spdData = data,
+            spdSource = source,
+            spectralResponse = null,
+            sampleAnalysis = null,
+            standards = emptyList(),
+            concentrationResult = null,
+            status = "Loaded ${data.wavelengthsNm.size} SPD points; SPD-dependent results were cleared.",
+            logs = fssaState.logs + "SPD: loaded $source (${data.wavelengthsNm.size} points); downstream results cleared."
+        )
+    }
+
     private fun startAnalysisCapture(purpose: AnalysisCapturePurpose) {
+        if (purpose == AnalysisCapturePurpose.POSITIONING && fssaState.positioningWavelengths == null) {
+            updateFssaError(fssaState.wavelengthValidationMessage ?: "Enter valid positioning wavelengths.")
+            return
+        }
         if (purpose != AnalysisCapturePurpose.POSITIONING && fssaState.wavelengthCalibration == null) {
             updateFssaError("Complete wavelength calibration first.")
+            return
+        }
+        if (purpose == AnalysisCapturePurpose.RESPONSE && fssaState.spdData == null) {
+            updateFssaError("No SPD source is loaded.")
             return
         }
         captureGeneration++
@@ -367,7 +445,10 @@ class MainActivity : ComponentActivity() {
         try {
             val next = when (purpose) {
                 AnalysisCapturePurpose.POSITIONING -> {
-                    val calibration = SpectralAlgorithms.calibrateWavelength(profile)
+                    val wavelengths = requireNotNull(current.positioningWavelengths) {
+                        "Enter valid positioning wavelengths."
+                    }
+                    val calibration = SpectralAlgorithms.calibrateWavelength(profile, wavelengths)
                     current.copy(
                         busy = false,
                         pendingCapture = null,
@@ -386,7 +467,7 @@ class MainActivity : ComponentActivity() {
                 }
                 AnalysisCapturePurpose.RESPONSE -> {
                     val calibration = requireNotNull(current.wavelengthCalibration)
-                    val spd = current.spdData ?: SpectralAlgorithms.defaultSpd()
+                    val spd = requireNotNull(current.spdData) { "No SPD source is loaded." }
                     val response = SpectralAlgorithms.calibrateResponse(profile, calibration, spd)
                     current.copy(
                         busy = false,
@@ -397,7 +478,7 @@ class MainActivity : ComponentActivity() {
                         concentrationResult = null,
                         lastProfile = profile,
                         status = "Spectral response generated.",
-                        logs = current.logs + "Step 2: calibrated R/G/B response over 420–680 nm using ${current.spdFileName ?: "simulated default SPD"}."
+                        logs = current.logs + "Step 2: calibrated R/G/B response over 420–680 nm using ${current.spdSource}."
                     )
                 }
                 AnalysisCapturePurpose.SAMPLE -> {

@@ -20,11 +20,10 @@ object SpectralAlgorithms {
 
     fun calibrateWavelength(
         profile: SpectralProfile,
-        redNm: Double = 622.5,
-        greenNm: Double = 522.5,
-        blueNm: Double = 462.5
+        wavelengths: PositioningWavelengths
     ): WavelengthCalibration {
         require(profile.size >= 101) { "The spectral profile is too short." }
+        val (redNm, greenNm, blueNm) = wavelengths
         val red = findPeak("R", redNm, "red", profile.red)
         val green = findPeak("G", greenNm, "green", profile.green)
         val blue = findPeak("B", blueNm, "blue", profile.blue)
@@ -218,6 +217,9 @@ object SpectralAlgorithms {
         require(spd.wavelengthsNm.size == spd.intensity.size && spd.wavelengthsNm.size >= 2)
         require((1 until spd.wavelengthsNm.size).all { spd.wavelengthsNm[it] > spd.wavelengthsNm[it - 1] }) {
             "SPD wavelengths must be strictly increasing."
+        }
+        require(spd.intensity.all { it.isFinite() && it >= 0.0 }) {
+            "SPD intensity must be finite and non-negative."
         }
         require(spd.intensity.any { it > 0.0 }) { "SPD contains no positive intensity." }
     }
