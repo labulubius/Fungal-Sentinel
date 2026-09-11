@@ -1,31 +1,33 @@
 package org.fungalsentinel.app
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonColors
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -86,7 +88,7 @@ fun AppSidebar(
                     modifier = Modifier
                         .weight(1f, fill = false)
                         .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                    verticalArrangement = Arrangement.spacedBy(1.dp)
                 ) {
                     DirectoryButton(
                         text = if (analyzeExpanded) "▾ Analyze" else "▸ Analyze",
@@ -121,7 +123,7 @@ fun AppSidebar(
                         },
                         selected = false,
                         enabled = captureEnabled,
-                        colors = captureButtonColors(),
+                        emphasized = true,
                         onClick = onCapture
                     )
                 }
@@ -170,39 +172,32 @@ private fun DirectoryButton(
     enabled: Boolean = true,
     indent: Dp = 0.dp,
     smallText: Boolean = false,
-    colors: ButtonColors = directoryButtonColors(selected)
+    emphasized: Boolean = false
 ) {
-    Button(
-        onClick = onClick,
-        enabled = enabled,
+    val background = when {
+        emphasized && !enabled -> Color.White.copy(alpha = 0.10f)
+        selected || emphasized -> SelectedItemBackground
+        else -> Color.Transparent
+    }
+    val contentColor = if (enabled) Color.White else Color.White.copy(alpha = 0.45f)
+
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(start = indent),
-        shape = MaterialTheme.shapes.medium,
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-        colors = colors
+            .padding(start = indent)
+            .heightIn(min = 40.dp)
+            .clip(MaterialTheme.shapes.medium)
+            .background(background)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        contentAlignment = Alignment.CenterStart
     ) {
         Text(
             text = text,
             modifier = Modifier.fillMaxWidth(),
+            color = contentColor,
             textAlign = TextAlign.Start,
             style = if (smallText) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium
         )
     }
 }
-
-@Composable
-private fun directoryButtonColors(selected: Boolean) = ButtonDefaults.buttonColors(
-    containerColor = if (selected) SelectedItemBackground else Color.Transparent,
-    contentColor = Color.White,
-    disabledContainerColor = Color.Transparent,
-    disabledContentColor = Color.White.copy(alpha = 0.38f)
-)
-
-@Composable
-private fun captureButtonColors() = ButtonDefaults.buttonColors(
-    containerColor = SelectedItemBackground,
-    contentColor = Color.White,
-    disabledContainerColor = Color.White.copy(alpha = 0.10f),
-    disabledContentColor = Color.White.copy(alpha = 0.45f)
-)
