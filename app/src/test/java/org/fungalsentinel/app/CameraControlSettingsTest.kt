@@ -69,6 +69,32 @@ class CameraControlSettingsTest {
     }
 
     @Test
+    fun spectralControlsUseExtendedRangesWithinDeviceCapabilities() {
+        val device = CameraControlRanges(
+            exposureTimeNs = 100_000L..10_000_000_000L,
+            iso = 25..6_400,
+            focusDistanceDiopters = 0.0f..12.0f
+        )
+
+        val controls = device.forSpectralControls()
+
+        assertEquals(10_000_000L..3_000_000_000L, controls.exposureTimeNs)
+        assertEquals(50..1_600, controls.iso)
+        assertEquals(0.0f..5.0f, controls.focusDistanceDiopters)
+    }
+
+    @Test
+    fun spectralControlsRespectNarrowerDeviceRanges() {
+        val device = CameraControlRanges(
+            exposureTimeNs = 20_000_000L..800_000_000L,
+            iso = 100..800,
+            focusDistanceDiopters = 0.0f..2.5f
+        )
+
+        assertEquals(device, device.forSpectralControls())
+    }
+
+    @Test
     fun previewFrameRatePrefersStable30Fps() {
         val selected = PreviewFrameRateSelector.choose(
             listOf(10..10, 5..15, 15..15, 5..24, 24..24, 5..30, 7..30, 30..30)

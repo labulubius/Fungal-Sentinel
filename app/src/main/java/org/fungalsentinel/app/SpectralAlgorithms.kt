@@ -1,12 +1,13 @@
 package org.fungalsentinel.app
 
+import java.io.Serializable
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 
 object SpectralAlgorithms {
-    data class SpdData(val wavelengthsNm: DoubleArray, val intensity: DoubleArray)
+    data class SpdData(val wavelengthsNm: DoubleArray, val intensity: DoubleArray) : Serializable
 
     /** Matches the optional synthetic SPD fallback used by FSSA v1.3.2. */
     fun defaultSpd(): SpdData {
@@ -55,18 +56,88 @@ object SpectralAlgorithms {
         points.forEachIndexed { i, p ->
             wl[i] = p[0]
             validMask[i] = p[0] in validRange && p[1] > maxSpd * 0.05
-            for (channel in 0..2) channels[channel][i] = if (validMask[i]) p[channel + 2] / max(p[1], 1e-6) else 0.0
+            for (channel in 0..2) channels[channel][i] = if (validMask[i]) p[channel + 2] / (p[1] + 1e-6) else 0.0
         }
         for (channel in channels.indices) {
-            channels[channel] = movingAverage(channels[channel], 21)
+            channels[channel] = savitzkyGolay21QuadraticNearest(channels[channel])
             for (i in channels[channel].indices) if (!validMask[i]) channels[channel][i] = 0.0
             val maximum = channels[channel].maxOrNull() ?: 0.0
-            require(maximum > 0.0) { "${SpectralChannel.entries[channel]} response is empty." }
-            for (i in channels[channel].indices) {
-                channels[channel][i] = if (validMask[i]) max(0.0, channels[channel][i] / maximum) else 0.0
+            if (maximum > 0.0) {
+                for (i in channels[channel].indices) {
+                    channels[channel][i] = if (validMask[i]) channels[channel][i] / maximum else 0.0
+                }
             }
         }
         return SpectralResponse(wl, channels[0], channels[1], channels[2], validRange)
+    }
+
+    /** Averages one capture batch after checking that profiles are geometrically compatible. */
+    fun averageProfiles(profiles: List<SpectralProfile>): SpectralProfile {
+        require(profiles.isNotEmpty()) { "At least one profile is required." }
+        require(profiles.size <= FssaUiState.MAX_BATCH_PROFILES) { "A capture batch is limited to 5 profiles." }
+        val first = profiles.first()
+        require(first.size > 0) { "Profiles must not be empty." }
+        require(profiles.all {
+            it.size == first.size && it.red.size == first.red.size && it.blue.size == first.blue.size &&
+                it.xRoi == first.xRoi && RawProfileExtractor.metadataMatches(first.metadata, it.metadata)
+        }) { "Profiles in a batch must have matching dimensions, ROI, camera, ISO, focus and CFA." }
+        fun average(channel: (SpectralProfile) -> DoubleArray) = DoubleArray(first.size) { i ->
+            profiles.sumOf { channel(it)[i] } / profiles.size
+        }
+        return SpectralProfile(
+            average { it.red }, average { it.green }, average { it.blue }, first.xRoi,
+            profiles.map { it.saturatedFraction }.average(), first.metadata
+        )
+    }
+
+    /**
+     * v1.3.4 batch analysis: average 1-5 blanks, subtract/clip each of 1-5 samples,
+     * response-correct it independently, then report replicate mean and sample SD.
+     */
+    fun analyzeSamples(
+        blankProfiles: List<SpectralProfile>,
+        sampleProfiles: List<SpectralProfile>,
+        calibration: WavelengthCalibration,
+        response: SpectralResponse,
+        fluorophore: Fluorophore
+    ): SampleAnalysis {
+        require(blankProfiles.size in 1..FssaUiState.MAX_BATCH_PROFILES) { "Provide 1-5 blank profiles." }
+        require(sampleProfiles.size in 1..FssaUiState.MAX_BATCH_PROFILES) { "Provide 1-5 sample profiles." }
+        val blank = averageProfiles(blankProfiles)
+        // This also validates every sample against the batch and gives a useful early error.
+        averageProfiles(sampleProfiles)
+        require(sampleProfiles.all {
+            it.size == blank.size && it.xRoi == blank.xRoi && RawProfileExtractor.metadataMatches(blank.metadata, it.metadata)
+        }) { "Blank and sample batches must have matching dimensions, ROI, camera, ISO, focus and CFA." }
+
+        val blankSource = channelValues(blank, fluorophore.channel)
+        val responseValues = channelValues(response, fluorophore.channel)
+        require(responseValues.any { it.isFinite() && it > 0.0 }) {
+            "${fluorophore.channel} response is empty; repeat SPD calibration for this fluorophore."
+        }
+        var lastWavelengths = DoubleArray(0)
+        var lastIntensity = DoubleArray(0)
+        var lastPeak = 0.0
+        val areas = DoubleArray(sampleProfiles.size)
+        sampleProfiles.forEachIndexed { replicate, profile ->
+            val source = channelValues(profile, fluorophore.channel)
+            val sorted = source.indices.map { i ->
+                val wavelength = calibration.pixelToWavelength(i.toDouble())
+                val sensitivity = max(0.05, interpolate(response.wavelengthsNm, responseValues, wavelength))
+                wavelength to max(0.0, source[i] - blankSource[i]) / sensitivity
+            }.sortedBy { it.first }
+            val wavelengths = DoubleArray(sorted.size) { sorted[it].first }
+            val intensity = DoubleArray(sorted.size) { sorted[it].second }
+            val (area, peak) = integrateFluorophore(wavelengths, intensity, fluorophore)
+            areas[replicate] = area
+            lastWavelengths = wavelengths
+            lastIntensity = intensity
+            lastPeak = peak
+        }
+        return SampleAnalysis(
+            lastWavelengths, lastIntensity, areas.average(), lastPeak, fluorophore,
+            response.validRangeNm, areas
+        )
     }
 
     fun analyzeSample(
@@ -86,6 +157,9 @@ object SpectralAlgorithms {
             SpectralChannel.GREEN -> response.green
             SpectralChannel.BLUE -> response.blue
         }
+        require(responseValues.any { it.isFinite() && it > 0.0 }) {
+            "${fluorophore.channel} response is empty; repeat SPD calibration for this fluorophore."
+        }
         val baseline = percentile(source, 5.0)
         val sorted = source.indices.map { i ->
             val wl = calibration.pixelToWavelength(i.toDouble())
@@ -94,17 +168,7 @@ object SpectralAlgorithms {
         }.sortedBy { it.first }
         val wavelengths = DoubleArray(sorted.size) { sorted[it].first }
         val intensity = DoubleArray(sorted.size) { sorted[it].second }
-        val low = fluorophore.peakWavelengthNm - fluorophore.integrationWidthNm / 2.0
-        val high = fluorophore.peakWavelengthNm + fluorophore.integrationWidthNm / 2.0
-        var area = 0.0
-        var peak = 0.0
-        for (i in 1 until wavelengths.size) {
-            if (wavelengths[i - 1] >= low && wavelengths[i] <= high) {
-                area += (wavelengths[i] - wavelengths[i - 1]) * (intensity[i] + intensity[i - 1]) / 2.0
-                peak = max(peak, max(intensity[i], intensity[i - 1]))
-            }
-        }
-        require(area.isFinite() && area >= 0.0) { "The integrated signal is invalid." }
+        val (area, peak) = integrateFluorophore(wavelengths, intensity, fluorophore)
         return SampleAnalysis(wavelengths, intensity, area, peak, fluorophore, response.validRangeNm)
     }
 
@@ -112,7 +176,7 @@ object SpectralAlgorithms {
         standards: List<StandardMeasurement>,
         sampleArea: Double
     ): ConcentrationResult {
-        require(standards.size >= 2) { "At least two standards are required." }
+        require(standards.size in 2..FssaUiState.MAX_STANDARDS) { "Provide 2-10 standard groups." }
         require(standards.map { it.concentration }.distinct().size >= 2) { "Standard concentrations must differ." }
         require(standards.all { it.concentration.isFinite() && it.area.isFinite() }) { "Standards contain invalid values." }
         val meanX = standards.map { it.concentration }.average()
@@ -166,6 +230,16 @@ object SpectralAlgorithms {
         }
     }
 
+    /** scipy.signal.savgol_filter(values, 21, 2, mode="nearest") equivalent. */
+    internal fun savitzkyGolay21QuadraticNearest(values: DoubleArray): DoubleArray {
+        if (values.size <= 21) return values.copyOf()
+        // Exact least-squares smoothing coefficients for window_length=21, polyorder=2.
+        val coefficients = DoubleArray(21) { offset -> (329.0 - 5.0 * (offset - 10) * (offset - 10)) / 3059.0 }
+        return DoubleArray(values.size) { i ->
+            coefficients.indices.sumOf { j -> coefficients[j] * values[(i + j - 10).coerceIn(values.indices)] }
+        }
+    }
+
     internal fun percentile(values: DoubleArray, percentage: Double): Double {
         require(values.isNotEmpty())
         val sorted = values.copyOf().also { it.sort() }
@@ -173,6 +247,37 @@ object SpectralAlgorithms {
         val lower = floor(position).toInt()
         val fraction = position - lower
         return if (lower == sorted.lastIndex) sorted[lower] else sorted[lower] * (1.0 - fraction) + sorted[lower + 1] * fraction
+    }
+
+    private fun channelValues(profile: SpectralProfile, channel: SpectralChannel): DoubleArray = when (channel) {
+        SpectralChannel.RED -> profile.red
+        SpectralChannel.GREEN -> profile.green
+        SpectralChannel.BLUE -> profile.blue
+    }
+
+    private fun channelValues(response: SpectralResponse, channel: SpectralChannel): DoubleArray = when (channel) {
+        SpectralChannel.RED -> response.red
+        SpectralChannel.GREEN -> response.green
+        SpectralChannel.BLUE -> response.blue
+    }
+
+    private fun integrateFluorophore(
+        wavelengths: DoubleArray,
+        intensity: DoubleArray,
+        fluorophore: Fluorophore
+    ): Pair<Double, Double> {
+        val low = fluorophore.peakWavelengthNm - fluorophore.integrationWidthNm / 2.0
+        val high = fluorophore.peakWavelengthNm + fluorophore.integrationWidthNm / 2.0
+        var area = 0.0
+        var peak = 0.0
+        for (i in 1 until wavelengths.size) {
+            if (wavelengths[i - 1] >= low && wavelengths[i] <= high) {
+                area += (wavelengths[i] - wavelengths[i - 1]) * (intensity[i] + intensity[i - 1]) / 2.0
+                peak = max(peak, max(intensity[i], intensity[i - 1]))
+            }
+        }
+        require(area.isFinite() && area >= 0.0) { "The integrated signal is invalid." }
+        return area to peak
     }
 
     private fun findPeak(name: String, wavelength: Double, channel: String, profile: DoubleArray): SpectralPeak {

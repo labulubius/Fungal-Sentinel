@@ -28,16 +28,14 @@ import kotlin.math.max
 class CameraController(
     context: Context,
     private val onCaptureReadyChanged: (Boolean) -> Unit,
-    private val onRawCaptured: (Image, TotalCaptureResult, CameraCharacteristics, String, Long) -> Unit,
+    private val onRawCaptured: (RawCapture) -> Unit,
     private val onError: (String) -> Unit,
     private val onExposureStatusChanged: (ExposureStatus) -> Unit = {}
 ) {
     private val cameraManager = context.getSystemService(CameraManager::class.java)
 
-    val cameraId: String = cameraManager.cameraIdList.firstOrNull { id ->
-        cameraManager.getCameraCharacteristics(id)
-            .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
-    } ?: error("No back-facing camera is available.")
+    val cameraId: String = selectCameraId(cameraManager)
+        ?: error("No camera is available on this device.")
 
     val characteristics: CameraCharacteristics = cameraManager.getCameraCharacteristics(cameraId)
     val support: CameraControlSupport = detectCameraSupport(characteristics)
@@ -57,7 +55,11 @@ class CameraController(
     @Volatile private var autoExposureState = AutoExposureState()
     private val controlLock = Any()
     private var controlRevision = 0L
+    private var autoExposureLockTimedOut = false
+    private var autoExposureLockTimeout: Runnable? = null
+    private var autoExposureLockAttempt = 0L
 
+    private val timeoutHandler = Handler(Looper.getMainLooper())
     private val lifecycleLock = Any()
     private var cameraDevice: CameraDevice? = null
     private var opening = false
@@ -72,12 +74,17 @@ class CameraController(
     private var pendingRawImage: Image? = null
     private var pendingCaptureResult: TotalCaptureResult? = null
     private var pendingCaptureToken: Long? = null
+    private var pendingCaptureGeneration: Long? = null
+    private var pendingRawTimeout: Runnable? = null
     private var activeRawDispatches = 0
     private val readersPendingClose = mutableListOf<ImageReader>()
     @Volatile private var lifecycleGeneration: Long = 0
 
     fun start() {
-        if (backgroundThread != null) return
+        val existing = backgroundThread
+        if (existing?.isAlive == true) return
+        backgroundThread = null
+        backgroundHandler = null
         backgroundThread = HandlerThread("CameraBackground").also {
             it.start()
             backgroundHandler = Handler(it.looper)
@@ -88,9 +95,15 @@ class CameraController(
         val thread = backgroundThread ?: return
         thread.quitSafely()
         thread.join(1_000)
-        if (thread.isAlive) thread.quit()
-        backgroundThread = null
-        backgroundHandler = null
+        if (thread.isAlive) {
+            thread.quit()
+            thread.join(1_000)
+        }
+        // Retain ownership of a thread that has not stopped so start() cannot create a second one.
+        if (!thread.isAlive && backgroundThread === thread) {
+            backgroundThread = null
+            backgroundHandler = null
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -100,63 +113,62 @@ class CameraController(
             opening = true
             ++lifecycleGeneration
         }
-        cameraManager.openCamera(
-            cameraId,
-            object : CameraDevice.StateCallback() {
-                override fun onOpened(camera: CameraDevice) {
-                    val accepted = synchronized(lifecycleLock) {
-                        if (generation != lifecycleGeneration) {
-                            false
-                        } else {
-                            opening = false
-                            cameraDevice = camera
-                            true
+        try {
+            cameraManager.openCamera(
+                cameraId,
+                object : CameraDevice.StateCallback() {
+                    override fun onOpened(camera: CameraDevice) {
+                        val accepted = synchronized(lifecycleLock) {
+                            if (generation != lifecycleGeneration) {
+                                false
+                            } else {
+                                opening = false
+                                cameraDevice = camera
+                                true
+                            }
                         }
+                        if (!accepted) {
+                            camera.close()
+                            return
+                        }
+                        startPreview(view, generation)
                     }
-                    if (!accepted) {
-                        camera.close()
-                        return
-                    }
-                    startPreview(view, generation)
-                }
 
-                override fun onDisconnected(camera: CameraDevice) {
-                    camera.close()
-                    val current = synchronized(lifecycleLock) {
-                        if (generation == lifecycleGeneration) {
-                            opening = false
-                            if (cameraDevice === camera) cameraDevice = null
-                            true
-                        } else {
-                            false
-                        }
+                    override fun onDisconnected(camera: CameraDevice) {
+                        val current = invalidateCameraResources(generation, camera = camera)
+                        if (!current) camera.close()
+                        if (current) onError("Camera disconnected. Return to the app or reopen the preview to retry.")
                     }
-                    if (current) resetAutoExposureLock()
-                }
 
-                override fun onError(camera: CameraDevice, error: Int) {
-                    camera.close()
-                    val current = synchronized(lifecycleLock) {
-                        if (generation != lifecycleGeneration) {
-                            false
-                        } else {
-                            opening = false
-                            if (cameraDevice === camera) cameraDevice = null
-                            true
-                        }
+                    override fun onError(camera: CameraDevice, error: Int) {
+                        val current = invalidateCameraResources(generation, camera = camera)
+                        if (!current) camera.close()
+                        if (current) onError("Camera open failed: $error")
                     }
-                    if (current) {
-                        resetAutoExposureLock()
-                        onError("Camera open failed: $error")
-                    }
+                },
+                backgroundHandler
+            )
+        } catch (error: Exception) {
+            val current = synchronized(lifecycleLock) {
+                if (generation != lifecycleGeneration) {
+                    false
+                } else {
+                    lifecycleGeneration++
+                    opening = false
+                    true
                 }
-            },
-            backgroundHandler
-        )
+            }
+            if (current) {
+                onCaptureReadyChanged(false)
+                resetAutoExposureLock()
+                onError("Camera could not be opened: ${error.message ?: error.javaClass.simpleName}")
+            }
+        }
     }
 
     fun close() {
-        val resources = synchronized(lifecycleLock) {
+        val (closingGeneration, resources) = synchronized(lifecycleLock) {
+            val generation = lifecycleGeneration
             lifecycleGeneration++
             opening = false
             val current = listOf(captureSession, cameraDevice, previewSurface, rawImageReader)
@@ -165,7 +177,7 @@ class CameraController(
             previewSurface = null
             previewBufferSize = null
             rawImageReader = null
-            current
+            generation to current
         }
         onCaptureReadyChanged(false)
         resetAutoExposureLock()
@@ -173,12 +185,48 @@ class CameraController(
         (resources[1] as? CameraDevice)?.close()
         (resources[2] as? Surface)?.release()
         (resources[3] as? ImageReader)?.let(::closeReaderWhenSafe)
-        synchronized(rawLock) {
-            pendingRawImage?.close()
-            pendingRawImage = null
-            pendingCaptureResult = null
-            pendingCaptureToken = null
+        clearPendingRawForGeneration(closingGeneration)
+    }
+
+    private fun invalidateCameraResources(
+        generation: Long,
+        camera: CameraDevice? = null,
+        failedSession: CameraCaptureSession? = null
+    ): Boolean {
+        var currentSession: CameraCaptureSession? = null
+        var currentCamera: CameraDevice? = null
+        var currentSurface: Surface? = null
+        var currentReader: ImageReader? = null
+        val current = synchronized(lifecycleLock) {
+            if (generation != lifecycleGeneration) {
+                false
+            } else {
+                lifecycleGeneration++
+                opening = false
+                currentSession = captureSession
+                currentCamera = cameraDevice
+                currentSurface = previewSurface
+                currentReader = rawImageReader
+                captureSession = null
+                cameraDevice = null
+                previewSurface = null
+                previewBufferSize = null
+                rawImageReader = null
+                true
+            }
         }
+        if (!current) return false
+
+        onCaptureReadyChanged(false)
+        resetAutoExposureLock()
+        clearPendingRawForGeneration(generation)
+        failedSession?.close()
+        if (currentSession !== failedSession) currentSession?.close()
+        camera?.close()
+        if (currentCamera !== camera) currentCamera?.close()
+        currentSurface?.release()
+        currentReader?.let(::closeReaderWhenSafe)
+        return true
     }
 
     fun updateSettings(next: CameraControlSettings): CameraControlSettings {
@@ -189,6 +237,8 @@ class CameraController(
                 previous.meterThenLockEnabled != settings.meterThenLockEnabled
             ) {
                 autoExposureState = autoExposureState.reset()
+                autoExposureLockTimedOut = false
+                cancelAutoExposureLockTimeoutLocked()
             }
             controlRevision++
             settings
@@ -230,60 +280,81 @@ class CameraController(
         if (!exposureSnapshot.settings.manualControlsEnabled &&
             exposureSnapshot.settings.meterThenLockEnabled && support.autoExposureLock &&
             !exposureSnapshot.autoExposureState.locked
-        ) return "Wait for auto exposure to finish locking."
-        val camera = cameraDevice ?: return "Camera is not open."
-        val session = captureSession ?: return "Capture session is not ready."
-        val rawSurface = rawImageReader?.surface ?: return "RAW reader is not ready."
-
-        synchronized(rawLock) {
-            pendingRawImage?.close()
-            pendingRawImage = null
-            pendingCaptureResult = null
-            pendingCaptureToken = captureToken
+        ) {
+            return if (exposureSnapshot.autoExposureLockTimedOut) {
+                "Auto exposure lock timed out. Toggle meter-then-lock off and on to retry."
+            } else {
+                "Wait for auto exposure to finish locking."
+            }
         }
-
-        val generation = lifecycleGeneration
-        val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-        requestBuilder.addTarget(rawSurface)
-        val controlSnapshot = controlSnapshot()
-        applyCameraSettings(
-            requestBuilder,
-            controlSnapshot.settings,
-            controlSnapshot.autoExposureState,
-            constrainAutoExposureFps = false
-        )
-        session.capture(
-            requestBuilder.build(),
-            object : CameraCaptureSession.CaptureCallback() {
-                override fun onCaptureCompleted(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    result: TotalCaptureResult
-                ) {
-                    if (generation != lifecycleGeneration) return
-                    synchronized(rawLock) { pendingCaptureResult = result }
-                    dispatchCompletedRawIfReady()
-                }
-
-                override fun onCaptureFailed(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    failure: CaptureFailure
-                ) {
-                    if (generation == lifecycleGeneration) {
+        val resources = synchronized(lifecycleLock) {
+            val camera = cameraDevice ?: return "Camera is not open."
+            val session = captureSession ?: return "Capture session is not ready."
+            val rawSurface = rawImageReader?.surface ?: return "RAW reader is not ready."
+            val generation = lifecycleGeneration
+            synchronized(rawLock) {
+                if (pendingCaptureToken != null) return "A RAW capture is already in progress."
+                pendingRawImage?.close()
+                pendingRawImage = null
+                pendingCaptureResult = null
+                pendingCaptureToken = captureToken
+                pendingCaptureGeneration = generation
+                scheduleRawTimeoutLocked(
+                    captureToken,
+                    generation,
+                    rawCaptureTimeoutMs(exposureSnapshot.settings)
+                )
+            }
+            RawCaptureResources(camera, session, rawSurface, generation)
+        }
+        val camera = resources.camera
+        val session = resources.session
+        val rawSurface = resources.surface
+        val generation = resources.generation
+        return try {
+            val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+            requestBuilder.addTarget(rawSurface)
+            val controlSnapshot = controlSnapshot()
+            applyCameraSettings(
+                requestBuilder,
+                controlSnapshot.settings,
+                controlSnapshot.autoExposureState,
+                constrainAutoExposureFps = false
+            )
+            session.capture(
+                requestBuilder.build(),
+                object : CameraCaptureSession.CaptureCallback() {
+                    override fun onCaptureCompleted(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        result: TotalCaptureResult
+                    ) {
+                        if (generation != lifecycleGeneration) return
                         synchronized(rawLock) {
-                            pendingRawImage?.close()
-                            pendingRawImage = null
-                            pendingCaptureResult = null
-                            pendingCaptureToken = null
+                            if (pendingCaptureToken == captureToken &&
+                                pendingCaptureGeneration == generation
+                            ) pendingCaptureResult = result
                         }
-                        onError("RAW capture failed: ${failure.reason}")
+                        dispatchCompletedRawIfReady()
                     }
-                }
-            },
-            backgroundHandler
-        )
-        return null
+
+                    override fun onCaptureFailed(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        failure: CaptureFailure
+                    ) {
+                        if (generation == lifecycleGeneration && clearPendingRaw(captureToken, generation)) {
+                            onError("RAW capture failed: ${failure.reason}")
+                        }
+                    }
+                },
+                backgroundHandler
+            )
+            null
+        } catch (error: Exception) {
+            clearPendingRaw(captureToken, generation)
+            "RAW capture could not be submitted: ${error.message ?: error.javaClass.simpleName}"
+        }
     }
 
     private fun startPreview(view: TextureView, generation: Long) {
@@ -301,17 +372,25 @@ class CameraController(
             val rawSize = chooseRawSize()
             ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 2).apply {
                 setOnImageAvailableListener(
-                    { reader ->
-                        val image = reader.acquireNextImage()
+                    listener@{ reader ->
+                        val image = try {
+                            reader.acquireNextImage()
+                        } catch (_: IllegalStateException) {
+                            return@listener
+                        } ?: return@listener
                         val acceptedImage = synchronized(lifecycleLock) {
                             if (generation != lifecycleGeneration || rawImageReader !== reader) {
                                 false
                             } else {
                                 synchronized(rawLock) {
-                                    pendingRawImage?.close()
-                                    pendingRawImage = image
+                                    if (pendingCaptureToken == null) {
+                                        false
+                                    } else {
+                                        pendingRawImage?.close()
+                                        pendingRawImage = image
+                                        true
+                                    }
                                 }
-                                true
                             }
                         }
                         if (acceptedImage) {
@@ -377,7 +456,8 @@ class CameraController(
                 }
 
                 override fun onConfigureFailed(session: CameraCaptureSession) {
-                    val current = synchronized(lifecycleLock) { generation == lifecycleGeneration }
+                    val current = invalidateCameraResources(generation, failedSession = session)
+                    if (!current) session.close()
                     if (current) onError("Preview session configuration failed.")
                 }
         }
@@ -387,8 +467,13 @@ class CameraController(
                 camera.createCaptureSession(surfaces, callback, backgroundHandler)
             }
         } catch (error: Exception) {
-            val current = synchronized(lifecycleLock) { generation == lifecycleGeneration }
-            if (current) onError("Preview session configuration failed: ${error.message}")
+            val current = invalidateCameraResources(generation)
+            if (current) {
+                onError(
+                    "Preview session configuration failed: " +
+                        (error.message ?: error.javaClass.simpleName)
+                )
+            }
         }
     }
 
@@ -427,10 +512,10 @@ class CameraController(
                             return@synchronized false
                         }
                         val nextState = when {
-                            snapshot.autoExposureState.lockRequested &&
+                            !autoExposureLockTimedOut && snapshot.autoExposureState.lockRequested &&
                                 aeState == CaptureResult.CONTROL_AE_STATE_LOCKED ->
                                 autoExposureState.onLockConfirmed(settings, support)
-                            !snapshot.autoExposureState.lockRequested &&
+                            !autoExposureLockTimedOut && !snapshot.autoExposureState.lockRequested &&
                                 (aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED ||
                                     aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED) ->
                                 autoExposureState.onAeStable(settings, support)
@@ -452,6 +537,7 @@ class CameraController(
                 session.setRepeatingRequest(request, callback, handler)
             }
             notifyExposureStatus()
+            updateAutoExposureLockTimeout(generation)
         } catch (error: Exception) {
             val current = synchronized(lifecycleLock) {
                 generation == lifecycleGeneration && captureSession === session
@@ -533,9 +619,58 @@ class CameraController(
         ).firstOrNull(available::contains)
     }
 
+    private fun updateAutoExposureLockTimeout(generation: Long) {
+        synchronized(controlLock) {
+            val waitingForLock = !settings.manualControlsEnabled &&
+                settings.meterThenLockEnabled && support.autoExposureLock &&
+                !autoExposureState.locked
+            if (!waitingForLock) {
+                cancelAutoExposureLockTimeoutLocked()
+                return
+            }
+            if (autoExposureLockTimedOut || autoExposureLockTimeout != null) return
+
+            val attempt = ++autoExposureLockAttempt
+            val timeout = Runnable {
+                val didTimeOut = synchronized(controlLock) {
+                    if (attempt != autoExposureLockAttempt || generation != lifecycleGeneration ||
+                        settings.manualControlsEnabled || !settings.meterThenLockEnabled ||
+                        autoExposureState.locked
+                    ) {
+                        false
+                    } else {
+                        autoExposureLockTimeout = null
+                        autoExposureLockTimedOut = true
+                        autoExposureState = autoExposureState.reset()
+                        controlRevision++
+                        true
+                    }
+                }
+                if (didTimeOut) {
+                    notifyExposureStatus()
+                    applyRepeatingRequest()
+                    onError(
+                        "Auto exposure lock timed out after 8 seconds. " +
+                            "Toggle meter-then-lock off and on to retry."
+                    )
+                }
+            }
+            autoExposureLockTimeout = timeout
+            timeoutHandler.postDelayed(timeout, AUTO_EXPOSURE_LOCK_TIMEOUT_MS)
+        }
+    }
+
+    private fun cancelAutoExposureLockTimeoutLocked() {
+        autoExposureLockTimeout?.let(timeoutHandler::removeCallbacks)
+        autoExposureLockTimeout = null
+        autoExposureLockAttempt++
+    }
+
     private fun resetAutoExposureLock() {
         synchronized(controlLock) {
             autoExposureState = autoExposureState.reset()
+            autoExposureLockTimedOut = false
+            cancelAutoExposureLockTimeoutLocked()
             // Invalidates convergence callbacks from requests issued before a reset.
             controlRevision++
         }
@@ -543,7 +678,7 @@ class CameraController(
     }
 
     private fun controlSnapshot(): ControlSnapshot = synchronized(controlLock) {
-        ControlSnapshot(settings, autoExposureState, controlRevision)
+        ControlSnapshot(settings, autoExposureState, controlRevision, autoExposureLockTimedOut)
     }
 
     private fun notifyExposureStatus() {
@@ -569,22 +704,78 @@ class CameraController(
             pendingRawImage = null
             pendingCaptureResult = null
             pendingCaptureToken = null
+            pendingCaptureGeneration = null
+            cancelPendingRawTimeoutLocked()
             activeRawDispatches++
             Triple(image, result, token)
         } ?: return
+        val capture = RawCapture(
+            image = completed.first,
+            result = completed.second,
+            cameraCharacteristics = characteristics,
+            cameraId = cameraId,
+            captureToken = completed.third,
+            onClosed = ::releaseRawDispatch
+        )
         try {
-            onRawCaptured(completed.first, completed.second, characteristics, cameraId, completed.third)
-        } finally {
-            val readersToClose = synchronized(rawLock) {
-                activeRawDispatches--
-                if (activeRawDispatches == 0) {
-                    readersPendingClose.toList().also { readersPendingClose.clear() }
-                } else {
-                    emptyList()
-                }
-            }
-            readersToClose.forEach(ImageReader::close)
+            onRawCaptured(capture)
+        } catch (error: Exception) {
+            capture.close()
+            onError("RAW capture could not be handed off: ${error.message ?: error.javaClass.simpleName}")
         }
+    }
+
+    private fun scheduleRawTimeoutLocked(captureToken: Long, generation: Long, timeoutMs: Long) {
+        cancelPendingRawTimeoutLocked()
+        val timeout = Runnable {
+            if (clearPendingRaw(captureToken, generation)) {
+                onError("RAW capture timed out after ${timeoutMs / 1_000} seconds. Please try again.")
+            }
+        }
+        pendingRawTimeout = timeout
+        timeoutHandler.postDelayed(timeout, timeoutMs)
+    }
+
+    private fun cancelPendingRawTimeoutLocked() {
+        pendingRawTimeout?.let(timeoutHandler::removeCallbacks)
+        pendingRawTimeout = null
+    }
+
+    private fun clearPendingRaw(captureToken: Long, generation: Long): Boolean = synchronized(rawLock) {
+        if (pendingCaptureToken != captureToken || pendingCaptureGeneration != generation) {
+            return@synchronized false
+        }
+        pendingRawImage?.close()
+        pendingRawImage = null
+        pendingCaptureResult = null
+        pendingCaptureToken = null
+        pendingCaptureGeneration = null
+        cancelPendingRawTimeoutLocked()
+        true
+    }
+
+    private fun clearPendingRawForGeneration(generation: Long): Boolean = synchronized(rawLock) {
+        if (pendingCaptureGeneration != generation) return@synchronized false
+        pendingRawImage?.close()
+        pendingRawImage = null
+        pendingCaptureResult = null
+        pendingCaptureToken = null
+        pendingCaptureGeneration = null
+        cancelPendingRawTimeoutLocked()
+        true
+    }
+
+    private fun releaseRawDispatch() {
+        val readersToClose = synchronized(rawLock) {
+            activeRawDispatches--
+            check(activeRawDispatches >= 0) { "RAW dispatch lease count became negative." }
+            if (activeRawDispatches == 0) {
+                readersPendingClose.toList().also { readersPendingClose.clear() }
+            } else {
+                emptyList()
+            }
+        }
+        readersToClose.forEach(ImageReader::close)
     }
 
     private fun closeReaderWhenSafe(reader: ImageReader) {
@@ -683,13 +874,53 @@ class CameraController(
         val generation: Long
     )
 
+    private data class RawCaptureResources(
+        val camera: CameraDevice,
+        val session: CameraCaptureSession,
+        val surface: Surface,
+        val generation: Long
+    )
+
     private data class ControlSnapshot(
         val settings: CameraControlSettings,
         val autoExposureState: AutoExposureState,
-        val revision: Long
+        val revision: Long,
+        val autoExposureLockTimedOut: Boolean
     )
 
     private companion object {
         const val MAX_PREVIEW_PIXELS = 1920L * 1080L
+        const val RAW_CAPTURE_TIMEOUT_MS = 15_000L
+        const val AUTO_EXPOSURE_LOCK_TIMEOUT_MS = 8_000L
+
+        fun rawCaptureTimeoutMs(settings: CameraControlSettings): Long {
+            val exposureMs = if (settings.manualControlsEnabled) settings.exposureTimeNs / 1_000_000L else 0L
+            return maxOf(RAW_CAPTURE_TIMEOUT_MS, exposureMs + 5_000L)
+        }
+
+        fun selectCameraId(manager: CameraManager): String? {
+            val candidates = manager.cameraIdList.mapNotNull { id ->
+                runCatching {
+                    val characteristics = manager.getCameraCharacteristics(id)
+                    val capabilities = characteristics.get(
+                        CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES
+                    ) ?: intArrayOf()
+                    val rawSizes = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                        ?.getOutputSizes(ImageFormat.RAW_SENSOR)
+                    CameraCandidate(
+                        id = id,
+                        backFacing = characteristics.get(CameraCharacteristics.LENS_FACING) ==
+                            CameraCharacteristics.LENS_FACING_BACK,
+                        rawOutput = capabilities.contains(
+                            CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW
+                        ) && !rawSizes.isNullOrEmpty(),
+                        manualSensor = capabilities.contains(
+                            CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR
+                        )
+                    )
+                }.getOrNull()
+            }
+            return CameraSelection.choose(candidates)
+        }
     }
 }

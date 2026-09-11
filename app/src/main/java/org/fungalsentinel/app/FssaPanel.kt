@@ -50,7 +50,21 @@ fun FssaPanel(
     onRestoreBuiltInSpd: () -> Unit,
     onFluorophoreChanged: (Fluorophore) -> Unit,
     onStandardConcentrationChanged: (String) -> Unit,
+    onCapturePurposeChanged: (AnalysisCapturePurpose) -> Unit,
+    onClearCaptureBatch: (AnalysisCapturePurpose) -> Unit,
+    onCommitStandard: () -> Unit,
+    onRemoveStandard: (Int) -> Unit,
     onCalculateConcentration: () -> Unit,
+    historyName: String,
+    projectNameInput: String,
+    projectActive: Boolean,
+    dngSaveMode: DngSaveMode,
+    onProjectNameChanged: (String) -> Unit,
+    onCreateProject: () -> Unit,
+    historySaving: Boolean,
+    historyDirty: Boolean,
+    enforceCalibrationGate: Boolean,
+    onSaveHistory: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -61,18 +75,77 @@ fun FssaPanel(
         )
     ) {
         Column(
-            modifier = Modifier.padding(14.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            modifier = Modifier.padding(CompactLayout.panelPadding).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(CompactLayout.sectionSpacing)
         ) {
-            Column {
-                Text("${state.step.number}. ${state.step.title}", style = MaterialTheme.typography.titleLarge)
-                Text("Offline RAW analysis", style = MaterialTheme.typography.bodySmall)
-            }
+            Text("${state.step.number}. ${state.step.title}", style = MaterialTheme.typography.titleLarge)
             HorizontalDivider(color = Color.White.copy(alpha = 0.22f))
             Text(state.status, color = if (state.busy) Color(0xffffb74d) else Color.White)
+            if (state.concentrationResult != null) {
+                Button(
+                    onClick = onSaveHistory,
+                    enabled = !state.busy && !historySaving && historyDirty
+                ) {
+                    Text(if (historySaving) "Saving ZIP…" else "Finish project & save to History")
+                }
+            }
+            state.lastProfile?.let {
+                val quality = AnalysisQualityPolicy.saturation(it.saturatedFraction)
+                Text(
+                    "Saturation ${percent(it.saturatedFraction)} · ${quality.name}",
+                    color = when (quality) {
+                        AnalysisQuality.PASS -> Color(0xffa5d6a7)
+                        AnalysisQuality.WARNING -> Color(0xffffd54f)
+                        AnalysisQuality.FAILED -> Color(0xffff8a80)
+                    },
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
             when (state.step) {
+                AnalysisStep.PROJECT -> {
+                    if (projectActive) {
+                        Metric("Project name", historyName)
+                        Text(
+                            "Locked · Reset to rename.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        ActionButton("Continue to Step 2", !state.busy) { onCreateProject() }
+                    } else {
+                        OutlinedTextField(
+                            value = projectNameInput,
+                            onValueChange = onProjectNameChanged,
+                            label = { Text("Project name") },
+                            supportingText = {
+                                Text(
+                                    if (projectNameInput.isNotEmpty() && !isValidProjectName(projectNameInput)) {
+                                        "1–100 characters; avoid / \\ : * ? \" < > |"
+                                    } else {
+                                        "Used for DNG files and History."
+                                    }
+                                )
+                            },
+                            singleLine = true,
+                            enabled = !state.busy,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                cursorColor = Color.White,
+                                focusedBorderColor = Color.White,
+                                unfocusedBorderColor = Color.White.copy(alpha = 0.45f),
+                                focusedLabelColor = Color.White,
+                                unfocusedLabelColor = Color.White.copy(alpha = 0.70f),
+                                focusedSupportingTextColor = Color.LightGray,
+                                unfocusedSupportingTextColor = Color.LightGray
+                            )
+                        )
+                        Text("DNG mode: ${dngSaveMode.displayName}", style = MaterialTheme.typography.bodySmall)
+                        ActionButton("Create & continue", !state.busy && isValidProjectName(projectNameInput)) {
+                            onCreateProject()
+                        }
+                    }
+                }
                 AnalysisStep.POSITIONING -> {
-                    Text("Capture R/G/B source. B/R fit; G checks.")
                     WavelengthField("R wavelength (nm)", state.redWavelengthInput, state.busy) {
                         onWavelengthChanged(SpectralChannel.RED, it)
                     }
@@ -90,17 +163,51 @@ fun FssaPanel(
                         enabled = !state.busy && !state.usesDefaultPositioningWavelengths,
                         colors = analysisOutlinedButtonColors()
                     ) { Text("Restore default wavelengths") }
+                    BatchSelector(
+                        label = "Positioning captures",
+                        purpose = AnalysisCapturePurpose.POSITIONING,
+                        count = state.positioningProfiles.size,
+                        selected = state.selectedCapturePurpose == AnalysisCapturePurpose.POSITIONING,
+                        busy = state.busy,
+                        onSelect = onCapturePurposeChanged,
+                        onClear = onClearCaptureBatch
+                    )
+                    Text("First capture locks the ROI.", style = MaterialTheme.typography.bodySmall)
                     state.wavelengthCalibration?.let {
                         Metric("Mapping", "p = ${f(it.slopePixelsPerNm)}λ + ${f(it.interceptPixels)}")
                         Metric("G validation error", "${f(it.validationErrorNm)} nm")
-                        ProfileChart(state.lastProfile)
+                        Metric("Calibration quality", it.qualityMessage)
+                        when (it.quality) {
+                            AnalysisQuality.WARNING -> Text(
+                                "Usable with caution; improve alignment.",
+                                color = Color(0xffffd54f)
+                            )
+                            AnalysisQuality.FAILED -> Text(
+                                if (enforceCalibrationGate) {
+                                    "FAILED · Adjust alignment before Step 3."
+                                } else {
+                                    "FAILED · Step 3 override is active."
+                                },
+                                color = Color(0xffff8a80)
+                            )
+                            AnalysisQuality.PASS -> Unit
+                        }
+                        ProfileChart(state.positioningAverageProfile)
                     }
                 }
                 AnalysisStep.RESPONSE -> {
-                    Text("Capture the matching standard light source.")
                     Text("SPD: ${state.spdSource}", style = MaterialTheme.typography.bodySmall)
-                    Text("Bundled SPD requires its measured light source.", color = Color(0xffffd54f), style = MaterialTheme.typography.bodySmall)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Use the light source matching this SPD.", color = Color(0xffffd54f), style = MaterialTheme.typography.bodySmall)
+                    BatchSelector(
+                        label = "SPD captures",
+                        purpose = AnalysisCapturePurpose.RESPONSE,
+                        count = state.responseProfiles.size,
+                        selected = state.selectedCapturePurpose == AnalysisCapturePurpose.RESPONSE,
+                        busy = state.busy,
+                        onSelect = onCapturePurposeChanged,
+                        onClear = onClearCaptureBatch
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(CompactLayout.actionSpacing)) {
                         OutlinedButton(
                             onClick = onImportSpd,
                             enabled = !state.busy,
@@ -116,8 +223,10 @@ fun FssaPanel(
                     state.spectralResponse?.let { ResponseChart(it) }
                 }
                 AnalysisStep.SAMPLE -> {
-                    Text("Select fluorophore and capture the sample.")
-                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(CompactLayout.actionSpacing)
+                    ) {
                         Fluorophore.supported.forEach { fluor ->
                             OutlinedButton(
                                 onClick = { onFluorophoreChanged(fluor) },
@@ -129,20 +238,42 @@ fun FssaPanel(
                         }
                     }
                     Text("Target ${state.selectedFluorophore.peakWavelengthNm.toInt()} nm · ${state.selectedFluorophore.channel}")
+                    BatchSelector(
+                        label = "Blank captures",
+                        purpose = AnalysisCapturePurpose.SAMPLE_BLANK,
+                        count = state.sampleBlankProfiles.size,
+                        selected = state.selectedCapturePurpose == AnalysisCapturePurpose.SAMPLE_BLANK,
+                        busy = state.busy,
+                        onSelect = onCapturePurposeChanged,
+                        onClear = onClearCaptureBatch
+                    )
+                    BatchSelector(
+                        label = "Sample captures",
+                        purpose = AnalysisCapturePurpose.SAMPLE,
+                        count = state.sampleProfiles.size,
+                        selected = state.selectedCapturePurpose == AnalysisCapturePurpose.SAMPLE,
+                        busy = state.busy,
+                        onSelect = onCapturePurposeChanged,
+                        onClear = onClearCaptureBatch
+                    )
                     state.sampleAnalysis?.let {
-                        Metric("Integrated area", f(it.area))
-                        Metric("Peak intensity", f(it.peak))
+                        Metric("Integrated area (mean)", f(it.area))
+                        Metric("Sample SD", f(it.sd))
+                        Metric("Replicates", it.replicateAreas.size.toString())
+                        Metric("Peak intensity (last replicate)", f(it.peak))
                         SpectrumChart(it)
+                        Text("Chart: last shot · Area/SD: all shots", style = MaterialTheme.typography.bodySmall)
                     }
                 }
                 AnalysisStep.CONCENTRATION -> {
-                    Text("Capture 2–5 standards (3+ recommended).")
+                    Text("Standards: 2–10 groups · 3+ recommended")
                     OutlinedTextField(
                         value = state.standardConcentrationInput,
                         onValueChange = onStandardConcentrationChanged,
                         label = { Text("Standard concentration") },
                         singleLine = true,
-                        enabled = !state.busy,
+                        enabled = !state.busy && state.standardDraftConcentration == null &&
+                            state.standardBlankProfiles.isEmpty() && state.standardSampleProfiles.isEmpty(),
                         modifier = Modifier.fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedTextColor = Color.White,
@@ -154,36 +285,91 @@ fun FssaPanel(
                             unfocusedLabelColor = Color.White.copy(alpha = 0.70f)
                         )
                     )
+                    state.standardDraftConcentration?.let {
+                        Text("Concentration locked: ${f(it)}", color = Color(0xffffd54f))
+                    }
+                    BatchSelector(
+                        label = "Draft standard Blank",
+                        purpose = AnalysisCapturePurpose.STANDARD_BLANK,
+                        count = state.standardBlankProfiles.size,
+                        selected = state.selectedCapturePurpose == AnalysisCapturePurpose.STANDARD_BLANK,
+                        busy = state.busy,
+                        onSelect = onCapturePurposeChanged,
+                        onClear = onClearCaptureBatch
+                    )
+                    BatchSelector(
+                        label = "Draft standard Sample",
+                        purpose = AnalysisCapturePurpose.STANDARD_SAMPLE,
+                        count = state.standardSampleProfiles.size,
+                        selected = state.selectedCapturePurpose == AnalysisCapturePurpose.STANDARD_SAMPLE,
+                        busy = state.busy,
+                        onSelect = onCapturePurposeChanged,
+                        onClear = onClearCaptureBatch
+                    )
+                    ActionButton(
+                        "Add standard group",
+                        !state.busy && state.standards.size < FssaUiState.MAX_STANDARDS &&
+                            state.standardBlankProfiles.isNotEmpty() && state.standardSampleProfiles.isNotEmpty() &&
+                            state.standardConcentrationInput.toDoubleOrNull()?.isFinite() == true
+                    ) { onCommitStandard() }
                     state.standards.forEachIndexed { index, standard ->
-                        Text("Standard ${index + 1}: C=${f(standard.concentration)}, area=${f(standard.area)}")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "#${index + 1}  C=${f(standard.concentration)} · " +
+                                    "Mean=${f(standard.area)} · SD=${f(standard.sd)} · n=${standard.replicateAreas.size}",
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedButton(
+                                onClick = { onRemoveStandard(index) },
+                                enabled = !state.busy,
+                                colors = analysisOutlinedButtonColors()
+                            ) { Text("Remove") }
+                        }
                     }
                     if (state.standards.isNotEmpty()) {
                         ConcentrationChart(state.standards, state.concentrationResult, state.sampleAnalysis?.area)
                     }
+                    val curveReadinessError = when {
+                        state.sampleAnalysis == null -> "Complete Step 4 Sample analysis first."
+                        state.standards.size < 2 -> "Add at least two different standard groups."
+                        else -> runCatching {
+                            SpectralAlgorithms.calculateConcentration(state.standards, state.sampleAnalysis.area)
+                        }.exceptionOrNull()?.message
+                    }
                     ActionButton(
                         "Build curve",
-                        !state.busy && state.standards.size >= 2 && state.sampleAnalysis != null
+                        !state.busy && curveReadinessError == null
                     ) { onCalculateConcentration() }
+                    curveReadinessError?.let {
+                        Text("Not ready: $it", color = Color(0xffff8a80), style = MaterialTheme.typography.bodySmall)
+                    }
                     state.concentrationResult?.let {
                         Metric("Curve", "I = ${f(it.slope)}C + ${f(it.intercept)}")
                         Metric("R²", f(it.rSquared))
                         Metric("Predicted concentration", f(it.sampleConcentration))
+                        val warnings = AnalysisQualityPolicy.regressionWarnings(state.standards, it)
+                        warnings.forEach { warning ->
+                            Text("⚠ $warning", color = Color(0xffffd54f), style = MaterialTheme.typography.bodySmall)
+                        }
                         if (it.outsideCalibrationRange) {
                             Text(
-                                "⚠ OUT OF RANGE: predicted concentration is outside the calibrated standards.",
+                                "⚠ Predicted value is outside the standard range.",
                                 color = Color.White,
                                 style = MaterialTheme.typography.titleMedium,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .background(Color(0xffb71c1c))
-                                    .padding(12.dp)
+                                    .padding(CompactLayout.cardPadding)
                             )
                         }
                     }
                 }
             }
 
-            Spacer(Modifier.height(4.dp))
         }
     }
 }
@@ -213,6 +399,41 @@ private fun WavelengthField(
             unfocusedLabelColor = Color.White.copy(alpha = 0.70f)
         )
     )
+}
+
+@Composable
+private fun BatchSelector(
+    label: String,
+    purpose: AnalysisCapturePurpose,
+    count: Int,
+    selected: Boolean,
+    busy: Boolean,
+    onSelect: (AnalysisCapturePurpose) -> Unit,
+    onClear: (AnalysisCapturePurpose) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(CompactLayout.relatedSpacing)) {
+        Text("$label: $count/5", style = MaterialTheme.typography.bodyMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(CompactLayout.actionSpacing)) {
+            OutlinedButton(
+                onClick = { onSelect(purpose) },
+                enabled = !busy && count < FssaUiState.MAX_BATCH_PROFILES,
+                colors = analysisOutlinedButtonColors()
+            ) { Text(if (selected) "✓ Selected" else "Select") }
+            OutlinedButton(
+                onClick = { onClear(purpose) },
+                enabled = !busy && count > 0,
+                colors = analysisOutlinedButtonColors()
+            ) {
+                Text(
+                    when (purpose) {
+                        AnalysisCapturePurpose.POSITIONING -> "Clear all"
+                        AnalysisCapturePurpose.RESPONSE -> "Clear downstream"
+                        else -> "Clear"
+                    }
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -312,7 +533,7 @@ private fun SpectrumChart(analysis: SampleAnalysis) {
         emptyMessage = "No finite sample data in valid wavelength range"
     )
     Text(
-        "Shaded: integration interval · dashed: target peak ${f(analysis.fluorophore.peakWavelengthNm)} nm",
+        "Band · target ${f(analysis.fluorophore.peakWavelengthNm)} nm",
         style = MaterialTheme.typography.bodySmall
     )
 }
@@ -335,11 +556,12 @@ private fun ConcentrationChart(
         yRange = geometry.yRange,
         xLabel = "Concentration",
         yLabel = "Integrated area",
-        emptyMessage = "Capture standards to build the concentration chart"
+        emptyMessage = "Capture standards to build the concentration chart",
+        errorBars = geometry.errorBars
     )
     result?.let {
         Text(
-            "Fit: I = ${f(it.slope)}C + ${f(it.intercept)}    R² = ${f(it.rSquared)}    ● unknown",
+            "I=${f(it.slope)}C+${f(it.intercept)} · R²=${f(it.rSquared)} · ● unknown",
             style = MaterialTheme.typography.bodySmall,
             color = if (it.outsideCalibrationRange) Color(0xffff8a80) else Color.White
         )
@@ -355,20 +577,21 @@ private fun XyChart(
     yLabel: String,
     emptyMessage: String,
     targetX: Double? = null,
-    interval: ClosedFloatingPointRange<Double>? = null
+    interval: ClosedFloatingPointRange<Double>? = null,
+    errorBars: List<ChartErrorBar> = emptyList()
 ) {
     val hasData = series.any { it.points.isNotEmpty() }
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(230.dp)
+            .height(CompactLayout.chartHeight)
             .background(Color.White.copy(alpha = 0.08f)),
         contentAlignment = Alignment.Center
     ) {
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(230.dp)
+                .height(CompactLayout.chartHeight)
                 .semantics { contentDescription = "$yLabel by $xLabel chart" }
         ) {
             val left = 66.dp.toPx()
@@ -410,6 +633,17 @@ private fun XyChart(
             drawLine(axisColor, Offset(left, bottom), Offset(right, bottom), 1.5f)
             targetX?.takeIf { it.isFinite() && it in xRange.min..xRange.max }?.let {
                 drawLine(Color(0xffffd54f), Offset(px(it), top), Offset(px(it), bottom), 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f)))
+            }
+            errorBars.forEach { bar ->
+                if (bar.x.isFinite() && bar.low.isFinite() && bar.high.isFinite()) {
+                    val x = px(bar.x)
+                    val lowY = py(bar.low)
+                    val highY = py(bar.high)
+                    val cap = 5.dp.toPx()
+                    drawLine(Color(0xff90caf9), Offset(x, lowY), Offset(x, highY), 2f)
+                    drawLine(Color(0xff90caf9), Offset(x - cap, lowY), Offset(x + cap, lowY), 2f)
+                    drawLine(Color(0xff90caf9), Offset(x - cap, highY), Offset(x + cap, highY), 2f)
+                }
             }
             series.forEach { item ->
                 if (item.connectLine && item.points.size >= 2) {
@@ -456,3 +690,4 @@ private fun tick(value: Double): String = when {
 }
 
 private fun f(value: Double): String = String.format(Locale.US, "%.4g", value)
+private fun percent(fraction: Double): String = String.format(Locale.US, "%.3f%%", fraction * 100.0)

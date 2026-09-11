@@ -1,5 +1,7 @@
 # Fungal Sentinel Agent Handoff
 
+> **最新交接请优先阅读：`docs/agent-handoff-v1.3.4-port.md`。本文件以下内容是 v1.2.2 阶段的历史记录。**
+>
 > Updated: 2026-09-11
 
 ## Repository state

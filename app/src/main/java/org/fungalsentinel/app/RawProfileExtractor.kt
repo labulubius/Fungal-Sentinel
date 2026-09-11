@@ -13,7 +13,8 @@ object RawProfileExtractor {
         image: Image,
         result: TotalCaptureResult,
         characteristics: CameraCharacteristics,
-        cameraId: String
+        cameraId: String,
+        fixedXRoi: IntRange? = null
     ): SpectralProfile {
         require(image.format == ImageFormat.RAW_SENSOR) { "Expected RAW_SENSOR image." }
         val plane = image.planes.single()
@@ -34,46 +35,56 @@ object RawProfileExtractor {
             return plane.buffer.getShort(offset).toInt() and 0xffff
         }
 
-        // A sampled high percentile projection locates the illuminated strip without allocating a full RGB frame.
-        val xProjection = DoubleArray(width)
-        val sampled = DoubleArray((height + 3) / 4)
-        for (x in 0 until width) {
-            var count = 0
-            var y = x and 1
-            while (y < height) {
-                if ((y and 3) == (x and 3)) {
-                    sampled[count++] = max(0.0, rawAt(x, y) - blackAt(x, y))
+        val roi = fixedXRoi?.also { validateFixedXRoi(it, width) } ?: run {
+            // A sampled high percentile projection locates the strip without allocating a full RGB frame.
+            val xProjection = DoubleArray(width)
+            val sampled = DoubleArray((height + 3) / 4)
+            for (x in 0 until width) {
+                var count = 0
+                var y = x and 1
+                while (y < height) {
+                    if ((y and 3) == (x and 3)) sampled[count++] = max(0.0, rawAt(x, y) - blackAt(x, y))
+                    y++
                 }
-                y++
+                xProjection[x] = if (count > 0) SpectralAlgorithms.percentile(sampled.copyOf(count), 99.5) else 0.0
             }
-            xProjection[x] = if (count > 0) SpectralAlgorithms.percentile(sampled.copyOf(count), 99.5) else 0.0
-        }
-        val window = max(11, (width / 300) * 2 + 1)
-        val smooth = SpectralAlgorithms.movingAverage(xProjection, window)
-        val baseline = SpectralAlgorithms.percentile(smooth, 20.0)
-        val peak = smooth.maxOrNull() ?: baseline
-        val threshold = baseline + 0.35 * (peak - baseline)
-        var bestStart = (width * 0.35).toInt()
-        var bestEnd = (width * 0.65).toInt()
-        var start = -1
-        for (x in 0..width) {
-            val active = x < width && smooth[x] > threshold
-            if (active && start < 0) start = x
-            if (!active && start >= 0) {
-                if (x - start > bestEnd - bestStart) {
-                    bestStart = start
-                    bestEnd = x
+            val window = max(11, (width / 300) * 2 + 1)
+            val smooth = SpectralAlgorithms.movingAverage(xProjection, window)
+            val baseline = SpectralAlgorithms.percentile(smooth, 20.0)
+            val peak = smooth.maxOrNull() ?: baseline
+            val threshold = baseline + 0.35 * (peak - baseline)
+            var bestStart = -1
+            var bestEnd = -1
+            var start = -1
+            for (x in 0..width) {
+                val active = x < width && smooth[x] > threshold
+                if (active && start < 0) start = x
+                if (!active && start >= 0) {
+                    if (bestStart < 0 || x - start > bestEnd - bestStart) {
+                        bestStart = start
+                        bestEnd = x
+                    }
+                    start = -1
                 }
-                start = -1
             }
+            if (bestStart < 0) {
+                bestStart = (width * 0.35).toInt()
+                bestEnd = (width * 0.65).toInt()
+            }
+            val x0 = max(0, bestStart - 80)
+            val x1 = min(width, bestEnd + 80)
+            require(x1 - x0 >= 4) { "Could not locate the illuminated ROI." }
+            x0 until x1
         }
-        val x0 = max(0, bestStart - 80)
-        val x1 = min(width, bestEnd + 80)
-        require(x1 - x0 >= 4) { "Could not locate the illuminated ROI." }
+        val x0 = roi.first
+        val x1 = roi.last + 1
 
         val red = DoubleArray(height)
         val green = DoubleArray(height)
         val blue = DoubleArray(height)
+        val redValid = BooleanArray(height)
+        val greenValid = BooleanArray(height)
+        val blueValid = BooleanArray(height)
         var saturated = 0L
         var samples = 0L
         for (y in 0 until height) {
@@ -88,21 +99,35 @@ object RawProfileExtractor {
                 if (value >= 0.98 * max(1.0, whiteLevel - black)) saturated++
                 samples++
             }
-            red[y] = if (counts[0] == 0) (red.getOrNull(y - 1) ?: 0.0) else sums[0] / counts[0]
-            green[y] = if (counts[1] == 0) (green.getOrNull(y - 1) ?: 0.0) else sums[1] / counts[1]
-            blue[y] = if (counts[2] == 0) (blue.getOrNull(y - 1) ?: 0.0) else sums[2] / counts[2]
+            if (counts[0] > 0) {
+                red[y] = sums[0] / counts[0]
+                redValid[y] = true
+            }
+            if (counts[1] > 0) {
+                green[y] = sums[1] / counts[1]
+                greenValid[y] = true
+            }
+            if (counts[2] > 0) {
+                blue[y] = sums[2] / counts[2]
+                blueValid[y] = true
+            }
         }
-        // Fill rows that contain no sample of a Bayer channel from adjacent rows.
-        fillMissingRows(red)
-        fillMissingRows(green)
-        fillMissingRows(blue)
+        // Fill only rows with no Bayer sample; a measured signal of 0.0 is still valid.
+        fillMissingRows(red, redValid)
+        fillMissingRows(green, greenValid)
+        fillMissingRows(blue, blueValid)
+
+        val exposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
+        normalizeForExposure(red, exposureTimeNs)
+        normalizeForExposure(green, exposureTimeNs)
+        normalizeForExposure(blue, exposureTimeNs)
 
         val blackLevel = dynamicBlack?.map { it.toDouble() }?.average()
             ?: staticBlack?.let { pattern -> (0..1).flatMap { y -> (0..1).map { x -> pattern.getOffsetForIndex(x, y).toDouble() } }.average() }
             ?: 0.0
         val metadata = CaptureMetadata(
             cameraId = cameraId,
-            exposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L,
+            exposureTimeNs = exposureTimeNs,
             iso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0,
             focusDistanceDiopters = result.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f,
             blackLevel = blackLevel,
@@ -111,7 +136,7 @@ object RawProfileExtractor {
             width = width,
             height = height
         )
-        return SpectralProfile(red, green, blue, x0 until x1, saturated.toDouble() / max(1L, samples), metadata)
+        return SpectralProfile(red, green, blue, roi, saturated.toDouble() / max(1L, samples), metadata)
     }
 
     fun metadataMatches(reference: CaptureMetadata, candidate: CaptureMetadata): Boolean =
@@ -119,12 +144,35 @@ object RawProfileExtractor {
             reference.width == candidate.width && reference.height == candidate.height &&
             reference.cfaArrangement == candidate.cfaArrangement &&
             reference.iso == candidate.iso &&
-            reference.exposureTimeNs == candidate.exposureTimeNs &&
             kotlin.math.abs(reference.focusDistanceDiopters - candidate.focusDistanceDiopters) <= 0.01f
 
-    private fun fillMissingRows(values: DoubleArray) {
-        for (i in 1 until values.size) if (values[i] == 0.0) values[i] = values[i - 1]
-        for (i in values.lastIndex - 1 downTo 0) if (values[i] == 0.0) values[i] = values[i + 1]
+    internal fun validateFixedXRoi(roi: IntRange, width: Int) {
+        require(width >= 4 && !roi.isEmpty() && roi.first >= 0 && roi.last < width && roi.last - roi.first + 1 >= 4) {
+            "Fixed ROI must contain at least 4 columns and be inside the image."
+        }
+    }
+
+    internal fun normalizeForExposure(values: DoubleArray, exposureTimeNs: Long) {
+        require(exposureTimeNs > 0L) { "RAW capture does not contain a valid exposure time." }
+        val exposureSeconds = exposureTimeNs / 1_000_000_000.0
+        for (i in values.indices) values[i] /= exposureSeconds
+    }
+
+    internal fun fillMissingRows(values: DoubleArray, valid: BooleanArray) {
+        require(values.size == valid.size) { "Signal and validity arrays must have the same size." }
+        require(valid.any { it }) { "A Bayer channel contains no samples." }
+        for (i in values.indices) {
+            if (valid[i]) continue
+            var lower = i - 1
+            while (lower >= 0 && !valid[lower]) lower--
+            var upper = i + 1
+            while (upper < values.size && !valid[upper]) upper++
+            values[i] = when {
+                lower >= 0 && upper < values.size -> (values[lower] + values[upper]) / 2.0
+                lower >= 0 -> values[lower]
+                else -> values[upper]
+            }
+        }
     }
 
     /** 0=red, 1=green, 2=blue. */

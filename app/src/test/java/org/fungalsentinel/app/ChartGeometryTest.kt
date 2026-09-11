@@ -77,6 +77,8 @@ class ChartGeometryTest {
         val chart = ChartGeometry.concentration(standards, result, sampleArea = 11.0)
 
         assertEquals(3, chart.standards.size)
+        assertEquals(3, chart.errorBars.size)
+        assertEquals(ChartErrorBar(0.0, 2.0, 2.0), chart.errorBars.first())
         assertEquals(ChartPoint(3.0, 11.0), chart.unknown)
         assertEquals(2, chart.regressionLine.size)
         chart.regressionLine.forEach { assertEquals(3.0 * it.x + 2.0, it.y, 1e-10) }
@@ -87,9 +89,19 @@ class ChartGeometryTest {
     }
 
     @Test
-    fun concentrationIgnoresNonfiniteValuesAndWorksWithoutRegression() {
+    fun concentrationRangeIncludesReplicateErrorBars() {
+        val standard = StandardMeasurement(1.0, doubleArrayOf(-10.0, 10.0))
+        val chart = ChartGeometry.concentration(listOf(standard), null, null)
+        assertTrue(chart.errorBars.single().low < -14.0)
+        assertTrue(chart.errorBars.single().high > 14.0)
+        assertTrue(chart.yRange.min < chart.errorBars.single().low)
+        assertTrue(chart.yRange.max > chart.errorBars.single().high)
+    }
+
+    @Test
+    fun concentrationIgnoresNonfiniteSampleAndWorksWithoutRegression() {
         val chart = ChartGeometry.concentration(
-            listOf(StandardMeasurement(Double.NaN, 2.0), StandardMeasurement(4.0, 9.0)),
+            listOf(StandardMeasurement(4.0, 9.0)),
             result = null,
             sampleArea = Double.POSITIVE_INFINITY
         )

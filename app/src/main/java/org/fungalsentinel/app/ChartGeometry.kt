@@ -4,6 +4,7 @@ import kotlin.math.abs
 import kotlin.math.max
 
 data class ChartPoint(val x: Double, val y: Double)
+data class ChartErrorBar(val x: Double, val low: Double, val high: Double)
 
 data class ChartRange(val min: Double, val max: Double) {
     init {
@@ -29,6 +30,7 @@ data class SpectrumChartGeometry(
 
 data class ConcentrationChartGeometry(
     val standards: List<ChartPoint>,
+    val errorBars: List<ChartErrorBar>,
     val regressionLine: List<ChartPoint>,
     val unknown: ChartPoint?,
     val xRange: ChartRange,
@@ -99,6 +101,13 @@ object ChartGeometry {
         val standardPoints = standards.mapNotNull {
             if (it.concentration.isFinite() && it.area.isFinite()) ChartPoint(it.concentration, it.area) else null
         }
+        val errorBars = standards.mapNotNull {
+            val mean = it.area
+            val sd = it.sd
+            if (it.concentration.isFinite() && mean.isFinite() && sd.isFinite() && sd >= 0.0) {
+                ChartErrorBar(it.concentration, mean - sd, mean + sd)
+            } else null
+        }
         val unknown = if (result?.sampleConcentration?.isFinite() == true && sampleArea?.isFinite() == true) {
             ChartPoint(result.sampleConcentration, sampleArea)
         } else null
@@ -110,8 +119,9 @@ object ChartGeometry {
                 ChartPoint(initialX.max, result.slope * initialX.max + result.intercept)
             ).filter { it.y.isFinite() }
         } else emptyList()
-        val yValues = standardPoints.map { it.y } + listOfNotNull(unknown?.y) + line.map { it.y }
-        return ConcentrationChartGeometry(standardPoints, line, unknown, initialX, paddedRange(yValues + 0.0))
+        val yValues = standardPoints.map { it.y } + errorBars.flatMap { listOf(it.low, it.high) } +
+            listOfNotNull(unknown?.y) + line.map { it.y }
+        return ConcentrationChartGeometry(standardPoints, errorBars, line, unknown, initialX, paddedRange(yValues + 0.0))
     }
 
     fun paddedRange(values: Iterable<Double>): ChartRange {

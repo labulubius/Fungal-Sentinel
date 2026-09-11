@@ -43,9 +43,9 @@ fun CameraSettingsPanel(
     ) {
         Column(
             modifier = Modifier
-                .padding(16.dp)
+                .padding(CompactLayout.panelPadding)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(CompactLayout.sectionSpacing)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -83,6 +83,13 @@ fun CameraSettingsPanel(
                     enabled = !settings.manualControlsEnabled,
                     onCheckedChange = { onSettingsChanged(settings.copy(meterThenLockEnabled = it)) }
                 )
+                if (!settings.manualControlsEnabled) {
+                    Text(
+                        "Capture starts after exposure locks. Toggle to retry.",
+                        color = Color.LightGray,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
 
             val manualExposureEnabled = settings.manualControlsEnabled && support.canUseManualControls
@@ -231,7 +238,7 @@ private fun LabeledSlider(
     enabled: Boolean,
     onValueChange: (Float) -> Unit
 ) {
-    Column {
+    Column(verticalArrangement = Arrangement.spacedBy(CompactLayout.relatedSpacing)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -268,7 +275,7 @@ private fun SettingSwitch(
             color = if (enabled) Color.White else Color.White.copy(alpha = 0.45f),
             maxLines = 2
         )
-        Spacer(modifier = Modifier.width(8.dp))
+        Spacer(modifier = Modifier.width(CompactLayout.actionSpacing))
         Switch(
             checked = checked,
             enabled = enabled,

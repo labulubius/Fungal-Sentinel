@@ -1,5 +1,6 @@
 package org.fungalsentinel.app
 
+import java.io.Serializable
 import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.roundToLong
@@ -14,7 +15,7 @@ data class CameraControlSettings(
     val edgeEnhancementEnabled: Boolean,
     val hotPixelCorrectionEnabled: Boolean,
     val meterThenLockEnabled: Boolean = false
-) {
+) : Serializable {
     fun clampedTo(ranges: CameraControlRanges): CameraControlSettings {
         return copy(
             exposureTimeNs = exposureTimeNs.coerceIn(ranges.exposureTimeNs),
@@ -55,13 +56,44 @@ data class CameraControlRanges(
     val iso: IntRange,
     val focusDistanceDiopters: ClosedFloatingPointRange<Float>
 ) {
+    /** Practical extended controls, intersected with the camera's real capabilities. */
+    fun forSpectralControls(): CameraControlRanges = CameraControlRanges(
+        exposureTimeNs = exposureTimeNs.intersectOrSelf(EXPERIMENT_EXPOSURE_TIME_NS),
+        iso = iso.intersectOrSelf(EXPERIMENT_ISO),
+        focusDistanceDiopters = focusDistanceDiopters.intersectOrSelf(EXPERIMENT_FOCUS_DIOPTERS)
+    )
+
     companion object {
+        val EXPERIMENT_EXPOSURE_TIME_NS = 10_000_000L..3_000_000_000L
+        val EXPERIMENT_ISO = 50..1_600
+        val EXPERIMENT_FOCUS_DIOPTERS = 0.0f..5.0f
+
         val fallback = CameraControlRanges(
-            exposureTimeNs = 1_000_000L..100_000_000L,
-            iso = 50..3_200,
-            focusDistanceDiopters = 0.0f..10.0f
+            exposureTimeNs = EXPERIMENT_EXPOSURE_TIME_NS,
+            iso = EXPERIMENT_ISO,
+            focusDistanceDiopters = EXPERIMENT_FOCUS_DIOPTERS
         )
     }
+}
+
+private fun LongRange.intersectOrSelf(limit: LongRange): LongRange {
+    val low = maxOf(first, limit.first)
+    val high = minOf(last, limit.last)
+    return if (low <= high) low..high else this
+}
+
+private fun IntRange.intersectOrSelf(limit: IntRange): IntRange {
+    val low = maxOf(first, limit.first)
+    val high = minOf(last, limit.last)
+    return if (low <= high) low..high else this
+}
+
+private fun ClosedFloatingPointRange<Float>.intersectOrSelf(
+    limit: ClosedFloatingPointRange<Float>
+): ClosedFloatingPointRange<Float> {
+    val low = maxOf(start, limit.start)
+    val high = minOf(endInclusive, limit.endInclusive)
+    return if (low <= high) low..high else this
 }
 
 data class CameraControlSupport(
