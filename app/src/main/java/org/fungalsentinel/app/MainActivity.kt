@@ -141,6 +141,7 @@ class MainActivity : ComponentActivity() {
                     CameraPreview(
                         onViewCreated = { textureView = it },
                         onSurfaceAvailable = cameraController::open,
+                        onSurfaceSizeChanged = cameraController::updatePreviewTransform,
                         onSurfaceDestroyed = cameraController::close
                     )
 

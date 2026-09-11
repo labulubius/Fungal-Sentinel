@@ -12,6 +12,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 fun CameraPreview(
     onViewCreated: (TextureView) -> Unit,
     onSurfaceAvailable: (TextureView) -> Unit,
+    onSurfaceSizeChanged: (TextureView) -> Unit,
     onSurfaceDestroyed: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -36,7 +37,9 @@ fun CameraPreview(
                         surface: SurfaceTexture,
                         width: Int,
                         height: Int
-                    ) = Unit
+                    ) {
+                        onSurfaceSizeChanged(this@apply)
+                    }
 
                     override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
                         onSurfaceDestroyed()

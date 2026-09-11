@@ -3,6 +3,8 @@ package org.fungalsentinel.app
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.ImageFormat
+import android.graphics.Matrix
+import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
@@ -19,6 +21,7 @@ import android.util.Range
 import android.util.Size
 import android.view.Surface
 import android.view.TextureView
+import kotlin.math.abs
 import kotlin.math.max
 
 class CameraController(
@@ -48,6 +51,7 @@ class CameraController(
     private var opening = false
     private var captureSession: CameraCaptureSession? = null
     private var previewSurface: Surface? = null
+    @Volatile private var previewBufferSize: Size? = null
     private var rawImageReader: ImageReader? = null
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
@@ -140,6 +144,7 @@ class CameraController(
             captureSession = null
             cameraDevice = null
             previewSurface = null
+            previewBufferSize = null
             rawImageReader = null
             current
         }
@@ -160,6 +165,32 @@ class CameraController(
         settings = next.clampedTo(ranges)
         applyRepeatingRequest()
         return settings
+    }
+
+    fun updatePreviewTransform(view: TextureView) {
+        val bufferSize = previewBufferSize ?: return
+        if (view.width <= 0 || view.height <= 0) return
+        val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        val frontFacing = characteristics.get(CameraCharacteristics.LENS_FACING) ==
+            CameraCharacteristics.LENS_FACING_FRONT
+        val rotation = PreviewTransform.relativeRotationDegrees(
+            sensorOrientationDegrees = sensorOrientation,
+            displayRotationDegrees = displayRotationDegrees(view.display?.rotation ?: Surface.ROTATION_0),
+            frontFacing = frontFacing
+        )
+        val matrix = Matrix().apply {
+            setValues(
+                PreviewTransform.matrixValues(
+                    viewWidth = view.width,
+                    viewHeight = view.height,
+                    bufferWidth = bufferSize.width,
+                    bufferHeight = bufferSize.height,
+                    rotationDegrees = rotation,
+                    mirrorHorizontally = frontFacing
+                )
+            )
+        }
+        view.setTransform(matrix)
     }
 
     fun captureRaw(captureToken: Long): String? {
@@ -221,7 +252,8 @@ class CameraController(
         val surfaceTexture = view.surfaceTexture ?: return
         onCaptureReadyChanged(false)
 
-        surfaceTexture.setDefaultBufferSize(view.width, view.height)
+        val selectedPreviewSize = choosePreviewSize(view)
+        surfaceTexture.setDefaultBufferSize(selectedPreviewSize.width, selectedPreviewSize.height)
         val newPreviewSurface = Surface(surfaceTexture)
         val newRawReader = if (support.raw) {
             val rawSize = chooseRawSize()
@@ -262,6 +294,7 @@ class CameraController(
                 previousSurface = previewSurface
                 previousReader = rawImageReader
                 previewSurface = newPreviewSurface
+                previewBufferSize = selectedPreviewSize
                 rawImageReader = newRawReader
                 true
             }
@@ -272,6 +305,11 @@ class CameraController(
             newPreviewSurface.release()
             newRawReader?.close()
             return
+        }
+        view.post {
+            if (generation == lifecycleGeneration && view.surfaceTexture === surfaceTexture) {
+                updatePreviewTransform(view)
+            }
         }
 
         val surfaces = buildList {
@@ -414,11 +452,49 @@ class CameraController(
         if (closeNow) reader.close()
     }
 
+    private fun choosePreviewSize(view: TextureView): Size {
+        val sizes = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?.getOutputSizes(SurfaceTexture::class.java)
+            ?.toList()
+            .orEmpty()
+        if (sizes.isEmpty()) return Size(view.width.coerceAtLeast(1), view.height.coerceAtLeast(1))
+
+        val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        val frontFacing = characteristics.get(CameraCharacteristics.LENS_FACING) ==
+            CameraCharacteristics.LENS_FACING_FRONT
+        val rotation = PreviewTransform.relativeRotationDegrees(
+            sensorOrientation,
+            displayRotationDegrees(view.display?.rotation ?: Surface.ROTATION_0),
+            frontFacing
+        )
+        val targetWidth = if (rotation == 90 || rotation == 270) view.height else view.width
+        val targetHeight = if (rotation == 90 || rotation == 270) view.width else view.height
+        val targetAspect = targetWidth.toDouble() / targetHeight.coerceAtLeast(1)
+        val targetArea = targetWidth.toLong() * targetHeight.toLong()
+        val practicalSizes = sizes.filter { it.width.toLong() * it.height <= MAX_PREVIEW_PIXELS }
+            .ifEmpty { sizes }
+
+        return practicalSizes.minWithOrNull(
+            compareBy<Size> {
+                abs(it.width.toDouble() / it.height - targetAspect)
+            }.thenBy {
+                abs(it.width.toLong() * it.height - targetArea)
+            }
+        ) ?: sizes.first()
+    }
+
     private fun chooseRawSize(): Size {
         val streamMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         return streamMap?.getOutputSizes(ImageFormat.RAW_SENSOR)
             ?.maxByOrNull { it.width.toLong() * it.height.toLong() }
             ?: Size(4000, 3000)
+    }
+
+    private fun displayRotationDegrees(rotation: Int): Int = when (rotation) {
+        Surface.ROTATION_90 -> 90
+        Surface.ROTATION_180 -> 180
+        Surface.ROTATION_270 -> 270
+        else -> 0
     }
 
     private fun detectCameraSupport(characteristics: CameraCharacteristics): CameraControlSupport {
@@ -451,5 +527,9 @@ class CameraController(
             iso = isoRange.lower..isoRange.upper,
             focusDistanceDiopters = 0.0f..max(0.0f, focusMax)
         )
+    }
+
+    private companion object {
+        const val MAX_PREVIEW_PIXELS = 1920L * 1080L
     }
 }
