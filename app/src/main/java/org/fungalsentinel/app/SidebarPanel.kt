@@ -178,12 +178,11 @@ fun AppSidebar(
                         text = when {
                             compactDetail && state.busy -> "…"
                             compactDetail && !support.raw -> "×"
-                            compactDetail && support.autoExposureLock && !settings.manualControlsEnabled && exposureStatus != ExposureStatus.AUTO_LOCKED -> "L"
+                            compactDetail && support.autoExposureLock && !settings.manualControlsEnabled && settings.meterThenLockEnabled && exposureStatus != ExposureStatus.AUTO_LOCKED -> "L"
                             compactDetail -> "●"
                             state.busy -> "Processing…"
                             !support.raw -> "RAW Unsupported"
-                            support.autoExposureLock && !settings.manualControlsEnabled && !settings.meterThenLockEnabled -> "Enable Meter & lock"
-                            support.autoExposureLock && !settings.manualControlsEnabled && exposureStatus != ExposureStatus.AUTO_LOCKED -> "Locking exposure…"
+                            support.autoExposureLock && !settings.manualControlsEnabled && settings.meterThenLockEnabled && exposureStatus != ExposureStatus.AUTO_LOCKED -> "Locking exposure…"
                             else -> "Capture"
                         },
                         selected = false,

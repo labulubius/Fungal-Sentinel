@@ -119,6 +119,15 @@ enum class ExposureStatus(val displayName: String) {
     AUTO_LOCKED("Auto — locked")
 }
 
+fun isExposureReadyForCapture(
+    settings: CameraControlSettings,
+    support: CameraControlSupport,
+    status: ExposureStatus
+): Boolean = settings.manualControlsEnabled ||
+    !settings.meterThenLockEnabled ||
+    !support.autoExposureLock ||
+    status == ExposureStatus.AUTO_LOCKED
+
 /** Runtime AE-lock state kept separate from the user's persistent camera settings. */
 data class AutoExposureState(
     val lockRequested: Boolean = false,

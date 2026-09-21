@@ -372,9 +372,11 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                         )
-                        val exposureReady = cameraSettings.manualControlsEnabled ||
-                            !cameraSupport.autoExposureLock ||
-                            (cameraSettings.meterThenLockEnabled && exposureStatus == ExposureStatus.AUTO_LOCKED)
+                        val exposureReady = isExposureReadyForCapture(
+                            cameraSettings,
+                            cameraSupport,
+                            exposureStatus
+                        )
                         val captureEnabled = experimentViewModel.hasActiveProject && cameraSupport.raw && captureReady && exposureReady &&
                             !fssaState.busy && !historyBusy && canCaptureSelectedBatch(fssaState, enforceCalibrationGate)
                         AppSidebar(

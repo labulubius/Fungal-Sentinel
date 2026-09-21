@@ -135,6 +135,26 @@ class CameraControlSettingsTest {
     }
 
     @Test
+    fun continuousAutoExposureCanCaptureWithoutEnablingMeterThenLock() {
+        val support = CameraControlSupport(
+            manualSensor = true,
+            raw = true,
+            manualFocus = true,
+            noiseReduction = true,
+            edgeEnhancement = true,
+            hotPixelCorrection = true,
+            autoExposureLock = true
+        )
+        val automatic = CameraControlSettings.defaults()
+        val waitingForLock = automatic.copy(meterThenLockEnabled = true)
+
+        assertTrue(isExposureReadyForCapture(automatic, support, ExposureStatus.AUTO))
+        assertFalse(isExposureReadyForCapture(waitingForLock, support, ExposureStatus.AUTO_METERING))
+        assertTrue(isExposureReadyForCapture(waitingForLock, support, ExposureStatus.AUTO_LOCKED))
+        assertTrue(isExposureReadyForCapture(CameraControlSettings.manualDefaults(), support, ExposureStatus.MANUAL))
+    }
+
+    @Test
     fun meterThenLockRequiresAutoExposureSupportAndConvergence() {
         val autoLock = CameraControlSettings.automatic().copy(meterThenLockEnabled = true)
         val supported = CameraControlSupport(true, false, false, false, false, false, autoExposureLock = true)
