@@ -241,7 +241,6 @@ fun AppSidebar(
             ) {
                 if (showResetConfirmation) {
                     ResetConfirmationPanel(
-                        onCancel = { showResetConfirmation = false },
                         onResetKeepDng = {
                             showResetConfirmation = false
                             onResetExperiment(false)
@@ -308,7 +307,6 @@ fun AppSidebar(
 
 @Composable
 private fun ResetConfirmationPanel(
-    onCancel: () -> Unit,
     onResetKeepDng: () -> Unit,
     onResetDeleteDng: () -> Unit
 ) {
@@ -332,11 +330,6 @@ private fun ResetConfirmationPanel(
             text = "Delete DNG & reset",
             selected = false,
             onClick = onResetDeleteDng
-        )
-        DirectoryButton(
-            text = "Cancel",
-            selected = false,
-            onClick = onCancel
         )
     }
 }

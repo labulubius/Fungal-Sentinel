@@ -11,7 +11,7 @@
 ## 当前基线
 
 - 软件定位：离线 Android Camera2 RAW 荧光光谱分析工具。
-- 当前版本：v1.3.6（versionCode 8，已移植 Python FSSA v1.3.4 算法流程）。
+- 当前版本：v1.3.7（versionCode 9，已移植 Python FSSA v1.3.4 算法流程）。
 - `./gradlew testDebugUnitTest lintDebug`：执行成功。
 - 当前总体判断：主要功能已经具备，属于功能型 Beta；在用于正式实验定量或广泛发布前，需要优先加强科学质量控制、异步状态一致性和相机异常处理。
 
