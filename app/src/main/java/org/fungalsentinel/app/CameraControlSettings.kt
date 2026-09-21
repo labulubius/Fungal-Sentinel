@@ -27,6 +27,9 @@ data class CameraControlSettings(
     companion object {
         const val DEFAULT_EXPOSURE_TIME_NS = 400_000_000L
 
+        /** New sessions use camera-controlled exposure while retaining analysis-friendly processing defaults. */
+        fun defaults(): CameraControlSettings = manualDefaults().copy(manualControlsEnabled = false)
+
         fun manualDefaults(): CameraControlSettings = CameraControlSettings(
             manualControlsEnabled = true,
             exposureTimeNs = DEFAULT_EXPOSURE_TIME_NS,

@@ -8,6 +8,17 @@ import org.junit.Test
 class CameraControlSettingsTest {
 
     @Test
+    fun newSessionsDefaultToAutomaticExposure() {
+        val settings = CameraControlSettings.defaults()
+
+        assertFalse(settings.manualControlsEnabled)
+        assertEquals(400_000_000L, settings.exposureTimeNs)
+        assertEquals(400, settings.iso)
+        assertFalse(settings.autoWhiteBalanceEnabled)
+        assertFalse(settings.meterThenLockEnabled)
+    }
+
+    @Test
     fun defaultManualSettingsUse400MillisecondsAndInfinityFocus() {
         val settings = CameraControlSettings.manualDefaults()
 

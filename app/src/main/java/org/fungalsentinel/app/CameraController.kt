@@ -47,9 +47,7 @@ class CameraController(
     )?.let { Range(it.first, it.last) }
 
     @Volatile
-    var settings: CameraControlSettings = CameraControlSettings.manualDefaults()
-        .copy(manualControlsEnabled = support.canUseManualControls)
-        .clampedTo(ranges)
+    var settings: CameraControlSettings = CameraControlSettings.defaults().clampedTo(ranges)
         private set
 
     @Volatile private var autoExposureState = AutoExposureState()
@@ -254,11 +252,7 @@ class CameraController(
         val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         val frontFacing = characteristics.get(CameraCharacteristics.LENS_FACING) ==
             CameraCharacteristics.LENS_FACING_FRONT
-        val rotation = PreviewTransform.relativeRotationDegrees(
-            sensorOrientationDegrees = sensorOrientation,
-            displayRotationDegrees = displayRotationDegrees(view.display?.rotation ?: Surface.ROTATION_0),
-            frontFacing = frontFacing
-        )
+        val displayRotation = displayRotationDegrees(view.display?.rotation ?: Surface.ROTATION_0)
         val matrix = Matrix().apply {
             setValues(
                 PreviewTransform.matrixValues(
@@ -266,8 +260,9 @@ class CameraController(
                     viewHeight = view.height,
                     bufferWidth = bufferSize.width,
                     bufferHeight = bufferSize.height,
-                    rotationDegrees = rotation,
-                    mirrorHorizontally = frontFacing
+                    sensorOrientationDegrees = sensorOrientation,
+                    displayRotationDegrees = displayRotation,
+                    frontFacing = frontFacing
                 )
             )
         }

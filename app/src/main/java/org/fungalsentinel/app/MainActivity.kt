@@ -66,8 +66,8 @@ class MainActivity : ComponentActivity() {
     private var analyzeExpanded by mutableStateOf(true)
     private var cameraSupport by mutableStateOf(CameraControlSupport(false, false, false, false, false, false))
     private var controlRanges by mutableStateOf(CameraControlRanges.fallback)
-    private var cameraSettings by mutableStateOf(CameraControlSettings.manualDefaults())
-    private var exposureStatus by mutableStateOf(ExposureStatus.MANUAL)
+    private var cameraSettings by mutableStateOf(CameraControlSettings.defaults())
+    private var exposureStatus by mutableStateOf(ExposureStatus.AUTO)
     private var captureReady by mutableStateOf(false)
     private var permissionScreenVisible = false
     @Volatile private var captureGeneration = 0L
